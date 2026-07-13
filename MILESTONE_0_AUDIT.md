@@ -191,7 +191,62 @@ The current PRODUCT_SPEC.md notes the distinction but does not make clear what "
 
 ---
 
-## 6. Remediation Plan
+## 6. Round 2 Audit Findings (2026-07-13)
+
+Round 1 remediation resolved all CI failures and toolchain issues. The following deficiencies were identified in the second review.
+
+### 6.1 `make check` incomplete — no infrastructure, runtime, or security steps
+
+The current `make check` runs 10 static-analysis steps only. A clean-clone developer cannot verify the full stack (infrastructure startup, migration cycle, Uvicorn startup, HTTP smoke tests, dependency vulnerability scan) by running a single gate command. Any gap between `make check` and what CI actually tests is a latent defect.
+
+### 6.2 Environment loading non-deterministic
+
+`env_file=".env"` in `config.py` is a relative path resolved against the process CWD. Running `uv run pytest` from `services/api/` resolves to `services/api/.env` (which does not exist). Running from any other directory resolves differently. The config is CWD-sensitive — this is a latent bug that will cause a hard-to-diagnose failure in scripts or CI that change directories.
+
+Additionally, the default `database_url` in `config.py` uses password `expertseat` but `docker-compose.yml` sets `POSTGRES_PASSWORD: expertseat_dev`. These must match.
+
+### 6.3 No dependency vulnerability scanning
+
+Gitleaks scans for **secrets** (committed credentials). ADR-023 conflates this with vulnerability scanning. No job scans for **known CVEs** in npm or Python dependencies. `pnpm audit` and `pip-audit` are not run in CI or in `make check`. Dependabot PRs are reactive; a blocking CI scan is proactive.
+
+### 6.4 GitHub Actions Node.js 20 deprecation warnings
+
+The current action SHAs target actions that run on Node.js 20 internally. GitHub Actions has deprecated Node.js 20 as an action runner. Warnings appear on every CI run. These should be updated to action versions that use Node.js 24.
+
+### 6.5 No branch protection on `main`
+
+The original SECURITY.md states "Branch protection on `main`: Not configured — GitHub plan limitations prevent some rule types." For public repositories, GitHub's free plan supports required status checks, required reviews, and disabling force push. These must be configured.
+
+### 6.6 No runtime CI job
+
+CI imports the FastAPI application (`from app.main import app`) to verify startup. It does not start Uvicorn, make HTTP requests, or verify health endpoints respond with correct status codes. A hidden import error or misconfigured CORS would pass CI but fail in production.
+
+### 6.7 Structured logging not fully configured
+
+`structlog` is declared as a dependency and `get_logger()` is called, but `structlog.configure()` is never called. Without explicit configuration, structlog uses its default behavior (which may not output JSON in production, may not include timestamps, and may not include log levels in the correct format). The exception handler logs `error=str(exc)` which may expose internal error messages to logs.
+
+### 6.8 No request ID middleware
+
+Requests have no correlation ID. Log lines for the same request cannot be correlated in production. Request ID must be generated at request entry, bound to structlog context, and returned in the `X-Request-ID` response header.
+
+### 6.9 Database connection check has no bounded timeout
+
+`check_database_connection()` in `database.py` uses the SQLAlchemy engine's default connect timeout, which is OS-dependent (may be 30 seconds or more). The readiness endpoint could block for an unbounded time under network failure. Timeout must be a configurable setting with a bounded default.
+
+### 6.10 Documentation still stale in multiple files
+
+- `ARCHITECTURE.md`: States "Next.js 14" in entity table; entity milestone ownership table is wrong
+- `DECISIONS.md`: ADR-023 says Gitleaks "replaces" dependency vulnerability scanning — incorrect; Gitleaks scans for secrets only; vulnerability scanning is a separate concern that is acknowledged as unimplemented
+- `SECURITY.md`: Still contains "CI has not yet run on `fix/m0-audit-remediation`" (stale); mixes implemented vs planned controls without clear separation
+- `TESTING.md`: Does not document runtime smoke tests, dependency-down degraded tests, or migration cycle tests
+- `CONTRIBUTING.md`: States repository is private; states Next.js 14; branch protection section incorrect
+- `RISK_REGISTER.md`: References Google Meet integration as a committed risk; risk count too low
+- `PRODUCT_SPEC.md`: Interview state machine not defined; Blueprint lifecycle states not defined; recruiter commands not enumerated; evidence schema not specified
+- `ROADMAP.md`: Dependency chain between milestones not stated (M5 requires M4, M6 requires M5, etc.); M11 is described as paying customers, not pilot readiness
+
+---
+
+## 7. Remediation Plan
 
 ### Branch
 
@@ -199,6 +254,7 @@ The current PRODUCT_SPEC.md notes the distinction but does not make clear what "
 
 ### Commit sequence
 
+Round 1:
 1. `docs: record milestone 0 audit findings` — this file
 2. `chore: align frontend runtime, workspace, and toolchain to supported versions`
 3. `fix: repair backend configuration isolation and health-check safety`
@@ -206,13 +262,22 @@ The current PRODUCT_SPEC.md notes the distinction but does not make clear what "
 5. `ci: rebuild CI to pass cleanly with pinned dependencies and secret scanning`
 6. `docs: restore authoritative product specification, roadmap, and decisions`
 
+Round 2:
+7. `docs: record milestone 0 round 2 audit findings` — this section
+8. `fix: make environment loading deterministic and add configurable timeouts`
+9. `fix: configure structlog, add request ID middleware, safe exception logging`
+10. `chore: add pip-audit to dev deps, expand make check quality gate`
+11. `ci: update action SHAs, add vulnerability scanning and runtime smoke-test jobs`
+12. `docs: correct stale content across all documentation files`
+
 ### Evidence required for acceptance
 
+Round 1 + Round 2:
 - `pnpm install --frozen-lockfile` from root: passes
 - `pnpm run --filter web lint`: passes
 - `pnpm run --filter web build`: passes
 - `pnpm run --filter web test`: passes (all tests green)
-- `uv run pytest -v`: passes (all tests green, including isolated config test)
+- `uv run pytest -v`: passes (all tests green, including CWD-independence config test)
 - `uv run ruff check .`: passes
 - `uv run ruff format --check .`: passes
 - `uv run pyright`: passes
@@ -221,8 +286,13 @@ The current PRODUCT_SPEC.md notes the distinction but does not make clear what "
 - `uv run alembic downgrade base`: passes
 - `uv run alembic upgrade head` (re-run): passes
 - Gitleaks history scan: no secrets found
-- GitHub Actions CI: all jobs green on the replacement PR
+- `pnpm audit --audit-level high`: passes (no high/critical npm CVEs)
+- `uv run pip-audit`: passes (no known Python CVEs)
+- GitHub Actions CI: all jobs green on the replacement PR (no Node.js 20 warnings)
+- Runtime CI job: Uvicorn starts, `/api/v1/health/live` returns 200, `/api/v1/health/ready` returns correct status
 - Milestone sequence in ROADMAP.md matches Master Specification exactly
 - ADR-018 marked superseded, replacement ADR present
+- ADR-023 corrected to distinguish secrets scanning from vulnerability scanning
 - No Google Meet in committed roadmap
 - No Verified Blueprint Library, Candidate Portal, or ATS Integrations in committed roadmap
+- Branch protection on `main` configured: required status checks, no force push, no direct push, no deletion
