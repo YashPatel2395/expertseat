@@ -114,7 +114,9 @@ audit:
 # (including degradation/recovery), and security scans.
 # Run with: make check
 # Requires: Docker running, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks 8.30.1.
-# Delegates to scripts/check_all.sh, which calls the same leaf scripts used by CI.
+# Delegates to scripts/check_all.sh → check_infrastructure.sh → check_migrations.sh.
+# Migration logic exists only in check_migrations.sh (used by both the runtime path
+# and the dedicated CI migrations job).
 check:
 	scripts/check_all.sh
 

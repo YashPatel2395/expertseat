@@ -9,7 +9,8 @@
 #               check_compose.sh        Docker Compose configuration validation
 #               check_backend.sh        ruff, pyright, pytest, import check
 #               check_frontend.sh       prettier, eslint, tsc, vitest, next build
-#   Phase 3 — check_infrastructure.sh   Docker Compose up, migration cycle
+#   Phase 3 — check_infrastructure.sh   Docker Compose up, health wait
+#               check_migrations.sh     uv sync + alembic upgrade/downgrade/upgrade
 #   Phase 4 — check_runtime.sh          HTTP liveness/readiness, degradation, recovery
 #   Phase 5 — check_security.sh         orchestrates:
 #               check_secrets.sh        Gitleaks 8.30.1 full history scan

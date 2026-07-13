@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # check_infrastructure.sh — Start Docker Compose services, wait for health, run migrations.
 #
+# Starts PostgreSQL and Redis, waits for both to become healthy, then delegates
+# the full migration cycle to scripts/check_migrations.sh (the single source of
+# truth for: uv sync --locked --extra dev, alembic upgrade, downgrade, re-upgrade).
+#
 # By default (CLEANUP_INFRA=true) stops services on exit so the script is safe
 # to run standalone. When invoked from check_all.sh, CLEANUP_INFRA=false is set
 # so services remain running for check_runtime.sh.
+#
+# Callers:
+#   check_all.sh (local make check) — CLEANUP_INFRA=false
+#   CI runtime job                  — CLEANUP_INFRA=false
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-API_DIR="${REPO_ROOT}/services/api"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPTS_DIR}/.." && pwd)"
 COMPOSE="docker compose -f ${REPO_ROOT}/infrastructure/docker-compose.yml"
 INFRA_TIMEOUT="${INFRA_TIMEOUT:-60}"
 CLEANUP_INFRA="${CLEANUP_INFRA:-true}"
@@ -55,16 +63,8 @@ while true; do
 done
 echo "  Redis healthy."
 
-echo "=== [infra] Running migration cycle ==="
-cd "${API_DIR}"
-
-echo "  Alembic upgrade head..."
-uv run alembic upgrade head
-
-echo "  Alembic downgrade base..."
-uv run alembic downgrade base
-
-echo "  Alembic re-upgrade head..."
-uv run alembic upgrade head
+# Delegate migration cycle to the single source of truth.
+# DATABASE_URL exported above is inherited by check_migrations.sh.
+"${SCRIPTS_DIR}/check_migrations.sh"
 
 echo "=== [infra] Infrastructure and migrations passed ==="

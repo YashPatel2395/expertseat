@@ -395,37 +395,77 @@ The Makefile previously claimed: "All validation logic lives in scripts/check_al
 
 ### Fix applied (2026-07-13)
 
-Six new leaf scripts created, each responsible for exactly one CI job's validation logic:
+Six new leaf scripts created. `check_migrations.sh` is the single source of truth for the migration cycle and is used by both the dedicated CI migrations job and by `check_infrastructure.sh` (which is called by the runtime CI job and by local `make check`):
 
 | Script | Used by |
 |---|---|
 | `scripts/check_compose.sh` | `check_static.sh` (local), `infra-validate` CI job |
 | `scripts/check_frontend.sh` | `check_static.sh` (local), `frontend` CI job |
 | `scripts/check_backend.sh` | `check_static.sh` (local), `backend` CI job |
-| `scripts/check_migrations.sh` | `backend` CI job (migration cycle) |
+| `scripts/check_migrations.sh` | `migrations` CI job (direct); `check_infrastructure.sh` → `runtime` CI job + local `make check` |
 | `scripts/check_secrets.sh` | `check_security.sh` (local), `secret-scan` CI job |
 | `scripts/check_dependencies.sh` | `check_security.sh` (local), `audit` CI job |
 
-`check_static.sh` and `check_security.sh` are now thin orchestrators that call the leaf scripts.
+Script delegation chain for migration logic:
 
-`check_all.sh` (invoked by `make check`) calls `check_static.sh` and `check_security.sh`, which in turn call the leaf scripts — the same scripts called by each CI job.
+```
+make check → check_all.sh → check_infrastructure.sh → check_migrations.sh
+CI runtime job            → check_infrastructure.sh → check_migrations.sh
+CI migrations job                                   → check_migrations.sh (direct)
+```
+
+`check_infrastructure.sh` starts services and waits for health, then delegates the full migration cycle (`uv sync --locked --extra dev`, alembic upgrade/downgrade/upgrade) to `check_migrations.sh`. It contains no direct Alembic commands.
+
+`check_static.sh` and `check_security.sh` are thin orchestrators that call their respective leaf scripts.
 
 CI changes:
 - `secret-scan`: replaced `gitleaks/gitleaks-action` with explicit binary download, SHA256 checksum verification via the official `checksums.txt` from the same release, and a call to `scripts/check_secrets.sh` (which also enforces exact version 8.30.1 before scanning)
 - `infra-validate`: now calls `scripts/check_compose.sh`
 - `frontend`: now calls `scripts/check_frontend.sh` (pnpm install happens inside the script)
 - `backend`: now calls `scripts/check_backend.sh` (`uv sync --locked --extra dev` happens inside the script)
-- `migrations`: now calls `scripts/check_migrations.sh` (`uv sync --locked --extra dev` happens inside the script)
+- `migrations`: now calls `scripts/check_migrations.sh` (`uv sync --locked --extra dev` and full alembic cycle happen inside the script)
 - `audit`: now calls `scripts/check_dependencies.sh` (`uv sync --locked --extra dev` and `pnpm install --frozen-lockfile` happen inside the script)
-- `runtime`: unchanged (already had parity)
+- `runtime`: unchanged — already called `check_infrastructure.sh` which now delegates to `check_migrations.sh`
 
 `check_versions.sh` updated to fail immediately if gitleaks is not exactly 8.30.1 (was previously a warning only).
 
-### Evidence required for acceptance
+### Evidence required for acceptance (Round 3)
 
 - `grep -R "uv sync --extra dev" .github scripts Makefile` returns no output
+- `grep -R "alembic upgrade\|alembic downgrade" scripts .github Makefile` shows results only in `scripts/check_migrations.sh`
 - `make check` exits 0 with gitleaks 8.30.1 installed locally
 - CI run on this commit: all 7 jobs green with the exact required names
+
+---
+
+## 10. Migration Parity Finalization Finding (2026-07-13)
+
+### Defect
+
+After Round 3 (section 9), `check_migrations.sh` was created as the leaf script for the dedicated CI `migrations` job. However, `check_infrastructure.sh` still contained its own inline Alembic cycle (upgrade → downgrade → upgrade), duplicating the same logic. Migration validation therefore had two implementations.
+
+The CI `migrations` job called `check_migrations.sh`. The runtime CI job and local `make check` called `check_infrastructure.sh`, which ran its own copy of the migration commands. The two paths were not guaranteed to stay in sync.
+
+### Fix applied (2026-07-13)
+
+`check_infrastructure.sh` now delegates the full migration cycle to `check_migrations.sh`:
+- Removed all direct Alembic commands from `check_infrastructure.sh`
+- Added `"${SCRIPTS_DIR}/check_migrations.sh"` call after services are healthy
+- `check_migrations.sh` is now the only file containing `alembic upgrade` or `alembic downgrade`
+
+Delegation chain after this fix:
+```
+make check → check_all.sh → check_infrastructure.sh → check_migrations.sh
+CI runtime                → check_infrastructure.sh → check_migrations.sh
+CI migrations                                       → check_migrations.sh (direct)
+```
+
+### Evidence required for acceptance (Round 4 — migration parity)
+
+- `grep -R "alembic upgrade\|alembic downgrade" scripts .github Makefile` returns results only in `scripts/check_migrations.sh`
+- `make check` exits 0
+- Clean-clone `make check` exits 0
+- CI run: all 7 jobs green
 
 ---
 

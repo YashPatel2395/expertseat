@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# check_migrations.sh — Database migration cycle: install, upgrade → downgrade → upgrade.
-# Used by: CI migrations job.
+# check_migrations.sh — Single source of truth for the database migration cycle.
+#   uv sync --locked --extra dev
+#   alembic upgrade head → alembic downgrade base → alembic upgrade head
+#
+# Used by:
+#   CI migrations job            — called directly
+#   scripts/check_infrastructure.sh — called after services are healthy (runtime CI + local make check)
+#
 # Assumes Python 3.12, uv 0.11.7, and a reachable PostgreSQL instance are available.
 # DATABASE_URL must be set in the environment.
 set -euo pipefail

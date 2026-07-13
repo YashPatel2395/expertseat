@@ -80,7 +80,7 @@ Tests that start the actual Uvicorn server and make real HTTP requests. These ve
 - The readiness endpoint recovers to 200 when a dependency is restored
 - Graceful degradation: when PostgreSQL is stopped, readiness returns `database: unavailable` but `redis: ok`; when Redis is stopped, readiness returns `redis: unavailable` but `database: ok`; liveness always returns 200 regardless of dependency state
 
-These run in CI as the `runtime` job. The job uses Docker Compose (not GitHub Actions `services:`) so that individual containers can be stopped and restarted to test degradation and recovery. The job delegates to `scripts/check_infrastructure.sh` (migration cycle) and `scripts/check_runtime.sh` (HTTP verification and degradation tests).
+These run in CI as the `runtime` job. The job uses Docker Compose (not GitHub Actions `services:`) so that individual containers can be stopped and restarted to test degradation and recovery. The job delegates to `scripts/check_infrastructure.sh` (service startup + health wait, which in turn calls `scripts/check_migrations.sh` for the migration cycle) and `scripts/check_runtime.sh` (HTTP verification and degradation tests).
 
 ### Evidence Integrity Tests (Planned, Milestone 5)
 
