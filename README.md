@@ -36,7 +36,7 @@ See [ROADMAP.md](./ROADMAP.md) for the full milestone plan.
 
 ```
 expertseat/
-├── apps/web/           Next.js 14 frontend (App Router, TypeScript)
+├── apps/web/           Next.js 16 frontend (App Router, TypeScript, React 19)
 ├── services/api/       FastAPI backend (Python 3.12)
 ├── infrastructure/     Docker Compose for local services
 ├── scripts/            Developer utility scripts
@@ -48,9 +48,22 @@ expertseat/
 
 ## Prerequisites
 
-- Node.js 20+ and pnpm 8+
-- Python 3.12+ and uv
-- Docker and Docker Compose
+- **Node.js 24** — `nvm install 24` or use `.nvmrc`
+- **pnpm 11.12.0** — via Corepack (bundled with Node.js): `corepack enable pnpm && corepack prepare pnpm@11.12.0 --activate`
+- **Python 3.12** — `pyenv install 3.12` or system package manager
+- **uv 0.11.7** — `pip install uv==0.11.7` or `brew install uv` then pin the version
+- **Docker and Docker Compose** — required for `make check` and local infrastructure
+- **Gitleaks 8.30.1** — `brew install gitleaks` (reviewed version: 8.30.1; newer versions accepted)
+
+Verify installed versions:
+```bash
+node --version          # v24.x.x
+pnpm --version          # 11.12.0
+python3 --version       # Python 3.12.x
+uv --version            # uv 0.11.7
+gitleaks version        # 8.30.1
+docker --version        # 27+ or Docker Desktop
+```
 
 ---
 
@@ -84,17 +97,24 @@ make dev
 
 | Command | Description |
 |---|---|
-| `make setup` | Install all frontend and backend dependencies |
+| `make setup` | Install all frontend and backend dependencies (locked — uses `--frozen-lockfile` and `--locked`) |
 | `make dev-infra` | Start PostgreSQL and Redis via Docker Compose |
+| `make dev-infra-wait` | Start infrastructure and wait until health checks pass |
 | `make dev` | Print instructions for starting all dev servers |
-| `make migrate` | Run Alembic database migrations |
-| `make format` | Format Python (ruff) and TypeScript (prettier) code |
-| `make lint` | Lint Python (ruff) and TypeScript (eslint) code |
+| `make format` | Auto-format all code (ruff + prettier) |
+| `make format-check` | Check formatting without modifying files |
+| `make lint` | Lint Python (ruff) and TypeScript (eslint) |
 | `make typecheck` | Type-check Python (pyright) and TypeScript (tsc) |
 | `make test` | Run all tests (pytest + vitest) |
-| `make build` | Build the Next.js frontend |
-| `make check` | Full quality gate: lint + typecheck + test + build |
-| `make clean` | Stop Docker services and remove build caches |
+| `make migrate` | Apply Alembic migrations to head |
+| `make migrate-down` | Roll back all Alembic migrations |
+| `make migrate-full` | Upgrade → downgrade → upgrade (full cycle verification) |
+| `make build` | Production build of the Next.js frontend |
+| `make infra-validate` | Validate Docker Compose configuration (no services started) |
+| `make secret-scan` | Run Gitleaks secret scan against git history (requires gitleaks) |
+| `make check` | Complete 54-step quality gate — requires Docker running (versions, static analysis, infrastructure, runtime, security) |
+| `make stop` | Stop Docker Compose services |
+| `make clean` | Stop services and remove build caches |
 
 ---
 
@@ -125,4 +145,6 @@ make dev
 
 ## License
 
-Private — all rights reserved. See repository settings.
+Copyright 2026 Yash Patel. All rights reserved.
+
+This repository is public for transparency, portfolio, and review purposes. No license is granted to copy, use, modify, or distribute this software or its documentation without explicit written permission from the author.

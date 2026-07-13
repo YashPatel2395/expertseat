@@ -1,0 +1,12 @@
+packages:
+  - "apps/*"
+
+# Permit build scripts for packages that require native binary compilation.
+# Each entry was reviewed individually before being approved.
+# - esbuild: required by Vitest and Next.js internals for native compilation
+# - unrs-resolver: required by eslint-config-next for module resolution
+# - sharp: required by Next.js for image optimization
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+  sharp: true

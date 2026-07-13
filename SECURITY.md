@@ -1,7 +1,7 @@
 # ExpertSeat — Security
 
-**Status**: Milestone 0 — Foundation
-**Date**: 2026-07-12
+**Status**: Milestone 0 — Foundation (Round 2 audit remediation 2026-07-13)
+**Date**: 2026-07-13
 
 This document distinguishes between current security measures (implemented) and planned security measures (not yet implemented).
 
@@ -24,11 +24,31 @@ This document distinguishes between current security measures (implemented) and 
 
 - `.gitignore` prevents `.env` files from being committed
 - `.env.example` contains only safe placeholder values
-- GitHub repository is private
-- Dependencies are managed with lock files (pnpm lockfile, uv.lock)
-- Dependabot is configured for automated dependency vulnerability alerts
-- CI uses least-privilege permissions (`contents: read`)
+- **Repository is currently public** (changed from private on 2026-07-13 per owner decision; see DECISIONS.md)
+- Root `pnpm-lock.yaml` and `services/api/uv.lock` lock all dependency versions
+- Dependabot is configured for automated dependency update PRs (npm and pip)
+- CI uses least-privilege permissions (`contents: read` at workflow level)
 - No secrets are hardcoded anywhere in the codebase
+- Gitleaks runs against full git history on every PR and push in CI (secret detection — not CVE scanning)
+- `pip-audit` and `pnpm audit --audit-level high` run in CI for dependency CVE scanning (separate from Gitleaks)
+- Docker development ports bound to `127.0.0.1` only (not exposed on all interfaces)
+- GitHub Actions pinned to immutable commit SHAs (Node.js 24 runtime; no Node.js 20 deprecation warnings)
+- `uv` version pinned in CI (`0.11.7`) for reproducible installs
+- Structured logging configured: JSON output in production, console output in development
+- Exception handler logs exception type only — never `str(exc)` which may contain sensitive data
+- Request ID middleware: UUID per request, bound to log context, returned in `X-Request-ID` header
+- Environment config resolves `.env` relative to repo root (not CWD) — deterministic across all invocation contexts
+- Health-check connection timeouts are bounded and configurable (no unbounded OS-level TCP timeouts)
+- Branch protection configured on `main` (verified 2026-07-13 via GitHub API):
+  - Required status checks (strict — branch must be up-to-date): Secret scan (Gitleaks), Validate Docker Compose configuration, Frontend (format, lint, typecheck, test, build), Backend (format, lint, typecheck, test), Database migrations (upgrade → downgrade → upgrade), Dependency vulnerability audit, API runtime smoke test
+  - No force pushes allowed
+  - No direct pushes allowed (enforce_admins: true)
+  - No branch deletion allowed
+
+### Known gaps at Milestone 0
+
+- **GitHub Advanced Security (GHAS)**: Not available at current plan tier. Dependency Review workflow was removed because it permanently failed without GHAS. `pip-audit` + `pnpm audit` cover CVE scanning; Gitleaks covers secret detection.
+- **Secret scanning by GitHub**: Not enabled (requires GHAS). Gitleaks in CI covers this gap.
 
 ### Not Yet Implemented
 
@@ -65,7 +85,7 @@ Everything in the sections below is planned but not implemented.
 
 ## Authorization (Planned, Milestone 1)
 
-- Role-based access control: `recruiter`, `org_admin`, `superadmin`
+- Role-based access control: `Admin`, `Recruiter`, `Reviewer` (org-level workspace roles); `superadmin` is a separate platform-level role distinct from org roles
 - All API endpoints require authentication except `/health/*`
 - All data queries include `organization_id` filter (enforced at repository layer)
 - PostgreSQL row-level security as defense-in-depth layer
@@ -93,8 +113,8 @@ Candidate data (name, contact, interview responses, assessments) is treated as C
 - Candidates are referenced by UUID internally
 - PII fields are encrypted at rest where possible
 - Candidate data is strictly isolated to the hiring organization
-- Data retention is configurable per org (default: 2 years)
-- Candidates can request data deletion (DSAR workflow, Milestone 7)
+- Data retention is configurable per org (retention period is a legal/privacy review decision — no default is committed here)
+- Candidates can request data deletion (DSAR workflow, Milestone 10)
 - Interview recordings (if any) require explicit multi-party consent
 
 ---
@@ -116,7 +136,7 @@ Blueprint evidence documents are uploaded by recruiters. Risks include:
 
 ---
 
-## Prompt Injection (Planned, Milestone 3)
+## Prompt Injection (Planned, Milestone 4)
 
 AI Role Agents receive input from multiple sources: blueprints (recruiter-controlled), reference documents (recruiter-uploaded), and candidate responses (untrusted). Prompt injection is a real risk.
 
@@ -165,7 +185,7 @@ Audit logs are append-only and not modifiable by application users.
 
 ## Recording Controls
 
-Interview recordings (when meeting connectors are implemented, Milestone 5):
+Interview recordings (when meeting connectors are implemented, Milestone 7):
 - Opt-in only — no default recording
 - Requires consent from all parties (recruiter, all human panelists, candidate)
 - Consent is recorded before recording starts
@@ -185,7 +205,7 @@ We have not yet published a vulnerability disclosure policy. When the platform l
 - We will work with reporters to understand and fix issues before public disclosure
 - We will credit reporters (with their permission)
 
-For Milestone 0, the repository is private. If you discover a security issue, contact the repository owner directly.
+The repository is currently public. If you discover a security issue, please open a private security advisory via the GitHub Security tab rather than a public issue, or contact the repository owner directly.
 
 ---
 

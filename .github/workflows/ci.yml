@@ -3,68 +3,185 @@ name: CI
 on:
   push:
     branches:
+      - main
       - "milestone/**"
+      - "fix/**"
   pull_request:
     branches:
       - main
 
+# Least-privilege permissions. Jobs that need additional permissions
+# declare them explicitly.
 permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend (lint, typecheck, test, build)
+  # ────────────────────────────────────────────────────────────────
+  # Secret scanning — runs against full history, not just the diff.
+  # Installs the official Gitleaks 8.30.1 binary with SHA256 checksum
+  # verification, then delegates to scripts/check_secrets.sh which
+  # also enforces the exact version before scanning.
+  # ────────────────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history)
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks 8.30.1
+        run: |
+          GITLEAKS_VERSION="8.30.1"
+          GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          CHECKSUMS_FILE="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -fsSL "${BASE_URL}/${CHECKSUMS_FILE}" -o "${CHECKSUMS_FILE}"
+          curl -fsSL "${BASE_URL}/${GITLEAKS_ARCHIVE}" -o "${GITLEAKS_ARCHIVE}"
+          grep "${GITLEAKS_ARCHIVE}" "${CHECKSUMS_FILE}" | sha256sum --check
+          tar -xzf "${GITLEAKS_ARCHIVE}" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          echo "Installed: $(gitleaks version)"
+
+      - name: Secret scan (full history)
+        run: scripts/check_secrets.sh
+
+  # ────────────────────────────────────────────────────────────────
+  # Infrastructure validation — no services started
+  # ────────────────────────────────────────────────────────────────
+  infra-validate:
+    name: Validate Docker Compose configuration
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Validate Docker Compose configuration
+        run: scripts/check_compose.sh
+
+  # ────────────────────────────────────────────────────────────────
+  # Frontend — format, lint, typecheck, test, build
+  # ────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (format, lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup Node.js 24
+        # actions/setup-node@v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: "20"
+          node-version: "24"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 8
+      - name: Enable pnpm 11.12.0 via Corepack
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@11.12.0 --activate
 
-      - name: Get pnpm store directory
+      - name: Verify pnpm version is exactly 11.12.0
+        run: |
+          PNPM_VER=$(pnpm --version)
+          echo "pnpm version: $PNPM_VER"
+          [ "$PNPM_VER" = "11.12.0" ] || (echo "ERROR: Expected pnpm 11.12.0, got $PNPM_VER"; exit 1)
+
+      - name: Get pnpm store path
         id: pnpm-cache
-        shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
-      - name: Install dependencies
-        working-directory: apps/web
-        run: pnpm install --frozen-lockfile
+      - name: Frontend checks (install, format, lint, typecheck, test, build)
+        run: scripts/check_frontend.sh
 
-      - name: Lint
-        working-directory: apps/web
-        run: pnpm lint
-
-      - name: Type check
-        working-directory: apps/web
-        run: pnpm tsc --noEmit
-
-      - name: Test
-        working-directory: apps/web
-        run: pnpm test --run
-
-      - name: Build
-        working-directory: apps/web
-        run: pnpm build
-
+  # ────────────────────────────────────────────────────────────────
+  # Backend — format, lint, typecheck, test
+  # ────────────────────────────────────────────────────────────────
   backend:
-    name: Backend (lint, typecheck, test)
+    name: Backend (format, lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: expertseat_test
+          POSTGRES_USER: expertseat
+          POSTGRES_PASSWORD: expertseat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # APP_ENV=test is set so that: the application starts correctly,
+    # and tests that check default values use monkeypatch to clear it.
+    env:
+      DATABASE_URL: postgresql://expertseat:expertseat_test@localhost:5432/expertseat_test
+      REDIS_URL: redis://localhost:6379/0
+      APP_ENV: test
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.7"
+
+      - name: Cache uv store
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Backend checks (install, format, lint, typecheck, test, import)
+        run: scripts/check_backend.sh
+
+  # ────────────────────────────────────────────────────────────────
+  # Database migrations — full upgrade → downgrade → re-upgrade cycle
+  # ────────────────────────────────────────────────────────────────
+  migrations:
+    name: Database migrations (upgrade → downgrade → upgrade)
     runs-on: ubuntu-latest
 
     services:
@@ -84,47 +201,141 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://expertseat:expertseat_test@localhost:5432/expertseat_test
-      REDIS_URL: redis://localhost:6379/0
       APP_ENV: test
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
         with:
-          version: "latest"
+          version: "0.11.7"
 
-      - name: Cache uv
-        uses: actions/cache@v4
+      - name: Cache uv store
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/uv
           key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-uv-
 
-      - name: Install dependencies
-        working-directory: services/api
-        run: uv sync --extra dev
+      - name: Migration cycle (install, upgrade, downgrade, upgrade)
+        run: scripts/check_migrations.sh
 
-      - name: Lint
-        working-directory: services/api
-        run: uv run ruff check .
+  # ────────────────────────────────────────────────────────────────
+  # Dependency vulnerability audit — pip-audit + pnpm audit
+  # Scans for known CVEs in Python and npm dependencies.
+  # Note: Gitleaks (secret-scan job) covers committed secrets;
+  # this job covers known CVEs — these are separate concerns.
+  # ────────────────────────────────────────────────────────────────
+  audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
 
-      - name: Format check
-        working-directory: services/api
-        run: uv run ruff format --check .
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
-      - name: Type check
-        working-directory: services/api
-        run: uv run pyright
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
 
-      - name: Test
+      - name: Install uv
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.7"
+
+      - name: Setup Node.js 24
+        # actions/setup-node@v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm 11.12.0 via Corepack
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@11.12.0 --activate
+
+      - name: Verify pnpm version is exactly 11.12.0
+        run: |
+          PNPM_VER=$(pnpm --version)
+          echo "pnpm version: $PNPM_VER"
+          [ "$PNPM_VER" = "11.12.0" ] || (echo "ERROR: Expected pnpm 11.12.0, got $PNPM_VER"; exit 1)
+
+      - name: Get pnpm store path
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Dependency vulnerability audit (pip-audit + pnpm audit)
+        run: scripts/check_dependencies.sh
+
+  # ────────────────────────────────────────────────────────────────
+  # Runtime smoke test — start Uvicorn via Docker Compose (not
+  # services:), verify HTTP responses, and test graceful degradation
+  # when a dependency is stopped and then restarted.
+  #
+  # Uses docker compose (not GitHub services:) so that individual
+  # containers can be stopped and restarted during degradation tests.
+  # Delegates to scripts/check_infrastructure.sh (migrations) and
+  # scripts/check_runtime.sh (HTTP + degradation tests).
+  # ────────────────────────────────────────────────────────────────
+  runtime:
+    name: API runtime smoke test
+    runs-on: ubuntu-latest
+
+    # DATABASE_URL and REDIS_URL match infrastructure/docker-compose.yml
+    # credentials exactly so no .env file is needed.
+    env:
+      DATABASE_URL: postgresql://expertseat:expertseat_dev@localhost:5432/expertseat
+      REDIS_URL: redis://localhost:6379/0
+      APP_ENV: test
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.7"
+
+      - name: Install Python dependencies
         working-directory: services/api
-        run: uv run pytest -v
+        run: uv sync --locked --extra dev
+
+      - name: Start infrastructure and run migration cycle
+        run: CLEANUP_INFRA=false scripts/check_infrastructure.sh
+
+      - name: Run runtime checks (liveness, readiness, degradation, recovery)
+        run: scripts/check_runtime.sh

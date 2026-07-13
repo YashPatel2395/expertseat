@@ -1,18 +1,18 @@
 # Contributing to ExpertSeat
 
-ExpertSeat is a private repository. This document describes the expected workflow for contributors.
+ExpertSeat is a public repository. This document describes the expected workflow for contributors.
 
 ---
 
 ## Branching
 
-- `main` — stable, CI-passing code. Direct pushes are prohibited.
-- `milestone/<N>-<slug>` — the active development branch for a milestone (e.g., `milestone/0-foundation`).
+- `main` — stable, CI-passing code. Branch protection is configured: direct pushes are prohibited, force push is disabled, branch deletion is disabled, and all CI checks must pass before merge.
+- `milestone/<N>-<slug>` — the active development branch for a milestone (e.g., `milestone/1-auth`).
 - `feat/<description>` — feature branches off the active milestone branch.
 - `fix/<description>` — bug fix branches.
 - `chore/<description>` — tooling, dependency, or documentation changes.
 
-All work should happen on a branch. PRs are required to merge to `main`.
+All work must happen on a branch. PRs are required to merge to `main`. CI must pass on the PR before merge.
 
 ---
 
@@ -41,7 +41,7 @@ Examples:
 ```
 feat: add blueprint CRUD endpoints
 fix: correct org isolation filter in candidate query
-chore: upgrade Next.js to 14.2.5
+chore: upgrade Next.js to 16.2.10
 docs: document AI provider abstraction in ARCHITECTURE.md
 test: add org boundary integration tests
 ```

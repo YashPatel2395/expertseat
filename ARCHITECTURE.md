@@ -1,7 +1,7 @@
 # ExpertSeat — Architecture
 
 **Status**: Milestone 0 — Foundation only
-**Date**: 2026-07-12
+**Date**: 2026-07-13
 
 This document describes both the current (implemented) state and the planned architecture. Sections are clearly labeled.
 
@@ -13,7 +13,7 @@ The repository establishes a monorepo with two services and shared infrastructur
 
 ```
 expertseat/
-├── apps/web/         Next.js 14 (App Router, TypeScript strict)
+├── apps/web/         Next.js 16 (App Router, React 19, TypeScript strict, Node.js 24)
 ├── services/api/     FastAPI (Python 3.12)
 └── infrastructure/   Docker Compose (PostgreSQL 16, Redis 7)
 ```
@@ -98,13 +98,13 @@ erDiagram
 
 | Entity Group | Planned Milestone |
 |---|---|
-| Organization, User | Milestone 1 |
-| Blueprint, BlueprintVersion | Milestone 2 |
-| Candidate, ConsentRecord | Milestone 2 |
-| Interview, InterviewEvent | Milestone 3 |
-| Report, Observation, ObservationReview | Milestone 3 |
-| MeetingSession (video/audio) | Milestone 5 |
-| AuditLog | Milestone 1 |
+| Organization, User, AuditLog | Milestone 1 |
+| Blueprint, BlueprintVersion, EvidenceDocument | Milestone 2 |
+| Candidate, ConsentRecord | Milestone 3 |
+| Interview, InterviewLifecycleEvent | Milestone 3 |
+| InterviewEvent, AgentObservation | Milestone 4 |
+| Report, Observation, ObservationReview | Milestone 5 |
+| MeetingSession (video/audio) | Milestone 7 |
 
 ---
 
@@ -115,18 +115,23 @@ All endpoints are under `/api/v1/`.
 | Router | Endpoints | Milestone |
 |---|---|---|
 | `/health` | `GET /live`, `GET /ready` | 0 (done) |
-| `/auth` | `POST /login`, `POST /logout`, `POST /refresh` | 1 |
-| `/orgs` | CRUD for organizations | 1 |
-| `/users` | CRUD for users within org | 1 |
-| `/blueprints` | CRUD + versioning | 2 |
-| `/candidates` | CRUD, consent management | 2 |
-| `/interviews` | Schedule, start, end | 3 |
-| `/interviews/{id}/agent` | Agent interaction endpoints | 3 |
-| `/reports` | Report retrieval, review | 3 |
+| `/auth` | login, logout, refresh | 1 |
+| `/organizations` | CRUD for organizations | 1 |
+| `/users` | CRUD for users, membership management | 1 |
+| `/memberships` | org member invite/remove | 1 |
+| `/blueprints` | CRUD + versioning + source documents + validation | 2 |
+| `/candidates` | CRUD, consent management, Zoom-link input | 3 |
+| `/interviews` | Schedule, state transitions, consent gate | 3 |
+| `/interviews/{id}/session` | Browser agent session, interview events, transcript turns, recruiter commands | 4 |
+| `/reports` | Report retrieval, observations, evidence items, human review, overrides | 5 |
+| `/meetings/feasibility` | MeetingConnector contract + spike artifacts | 6 |
+| `/meetings/{id}/session` | Zoom connector + MeetingSession runtime | 7 |
+| `/meetings/{id}/control` | Live control-room real-time endpoints | 8 |
+| `/comparisons` | Candidate comparison across same Blueprint | 9 |
 
 ---
 
-### AI Provider Abstraction (Planned, Milestone 3)
+### AI Provider Abstraction (Planned, Milestone 4)
 
 The system is designed to avoid lock-in to a single AI provider. All model calls go through a provider abstraction layer:
 
@@ -137,27 +142,41 @@ class AIProvider(Protocol):
     async def embed(self, text: str) -> list[float]: ...
 ```
 
-Planned initial support: OpenAI GPT-4o, Anthropic Claude. The abstraction allows swapping providers per Blueprint or per org.
+Planned initial support: configurable at Milestone 4 — specific provider and models to be selected based on capability and pricing at that time. The abstraction allows swapping providers per Blueprint or per org.
 
 ---
 
-### Meeting Connector Abstraction (Planned, Milestone 5)
+### Meeting Connector Abstraction (Contract: Milestone 6, Implementation: Milestone 7)
 
-Video interview integration is abstracted behind a connector interface:
+Video interview integration is abstracted behind a connector interface. The connector contract is defined in Milestone 6 (Zoom feasibility spike); the first implementation ships in Milestone 7 (Zoom integration). The interview intelligence layer must not contain any platform-specific reasoning — all Zoom, Webex, or other platform specifics belong inside the connector, not the agent.
 
 ```python
 # Planned interface — not yet implemented
+# All operations must be implementable for any supported meeting platform.
 class MeetingConnector(Protocol):
     async def join(self, session_id: str, agent_identity: AgentIdentity) -> MeetingSession: ...
-    async def send_message(self, session: MeetingSession, text: str) -> None: ...
     async def leave(self, session: MeetingSession) -> None: ...
+    async def receive_audio(self, session: MeetingSession) -> AsyncIterator[AudioChunk]: ...
+    async def send_audio(self, session: MeetingSession, audio: AudioChunk) -> None: ...
+    async def mute(self, session: MeetingSession) -> None: ...
+    async def unmute(self, session: MeetingSession) -> None: ...
+    async def participant_events(self, session: MeetingSession) -> AsyncIterator[ParticipantEvent]: ...
+    async def waiting_room_state(self, session: MeetingSession) -> WaitingRoomState: ...
+    async def health(self, session: MeetingSession) -> ConnectorHealth: ...
+    async def reconnect(self, session: MeetingSession) -> MeetingSession: ...
+    async def report_failure(self, session: MeetingSession, error: Exception) -> None: ...
 ```
 
-Planned connectors: Zoom (Milestone 5), Google Meet (Milestone 6). The agent participates as a named bot user — always disclosed as an AI system.
+Platform order (see ADR-021):
+- **Zoom** — first connector; feasibility spike in Milestone 6, implementation in Milestone 7
+- **Webex** — possible follow-on after Zoom is stable in production; not committed
+- **Google Meet** — explicitly out of scope for the initial MVP; will not be implemented in the committed milestone sequence
+
+The Role Agent joins as a disclosed, named participant and uses TTS to participate verbally (see ADR-020). A static profile image is used — no generated video avatar.
 
 ---
 
-### Evidence Pipeline (Planned, Milestone 2–3)
+### Evidence Pipeline (Planned, Milestone 2 and 4)
 
 ```mermaid
 sequenceDiagram
@@ -194,30 +213,32 @@ Planned implementation:
 
 ### Deployment (Planned, Milestone 9)
 
-Target: Kubernetes on a major cloud provider (provider TBD).
+Target: **Modular monolith** on a major cloud provider (provider TBD), backed by managed services. The container orchestration approach (serverless containers, managed container services, or otherwise) is deferred to Milestone 9 when the actual infrastructure requirements are understood.
+
+The application is structured as a modular monolith: a single deployable FastAPI service with clearly bounded internal modules (auth, blueprints, interviews, reports, meeting connectors). Modules communicate in-process, not over the network, until there is a demonstrated need to extract a service.
 
 ```mermaid
 graph LR
-    subgraph K8s Cluster
-        ING[Ingress / TLS]
-        WEB_DEP[web Deployment]
-        API_DEP[api Deployment]
-        WORKER[agent-worker Deployment]
+    subgraph Cloud Platform
+        ING[Load Balancer / TLS]
+        WEB_SVC[Next.js (managed hosting)]
+        API_SVC[FastAPI (containerized)]
     end
 
     subgraph Managed Services
-        RDS[(RDS PostgreSQL)]
-        ELASTICACHE[(ElastiCache Redis)]
-        S3_STORE[(S3 / Object Storage)]
+        PG[(Managed PostgreSQL)]
+        REDIS[(Managed Redis)]
+        S3_STORE[(Object Storage)]
     end
 
-    ING --> WEB_DEP
-    ING --> API_DEP
-    API_DEP --> WORKER
-    API_DEP --> RDS
-    API_DEP --> ELASTICACHE
-    WORKER --> S3_STORE
+    ING --> WEB_SVC
+    ING --> API_SVC
+    API_SVC --> PG
+    API_SVC --> REDIS
+    API_SVC --> S3_STORE
 ```
+
+**Rationale**: Kubernetes adds significant operational overhead and is premature for an early-stage product. Managed services (RDS, ElastiCache, S3-compatible storage) provide reliability and scaling without requiring a cluster. The decision to adopt container orchestration is deferred to when scale or operational requirements justify it.
 
 ---
 
@@ -227,7 +248,7 @@ See [DECISIONS.md](./DECISIONS.md) for full context on each decision.
 
 | Decision | Choice | Status |
 |---|---|---|
-| Frontend framework | Next.js 14 (App Router) | Decided |
+| Frontend framework | Next.js 16 (App Router, React 19, Node.js 24) | Decided |
 | Backend framework | FastAPI (Python 3.12) | Decided |
 | ORM | SQLAlchemy 2.0 | Decided |
 | Database | PostgreSQL 16 | Decided |
@@ -236,6 +257,6 @@ See [DECISIONS.md](./DECISIONS.md) for full context on each decision.
 | Package manager (BE) | uv | Decided |
 | Monorepo tooling | Simple scripts (no turborepo yet) | Decided |
 | Auth approach | JWT + session tokens | Planned |
-| AI provider | Abstracted (OpenAI first) | Planned |
-| Meeting connector | Abstracted (Zoom first) | Planned |
-| Deployment platform | Kubernetes (provider TBD) | Planned |
+| AI provider | Abstracted (provider selected at Milestone 4) | Planned |
+| Meeting connector | Abstracted (Zoom: feasibility M6, implementation M7) | Planned |
+| Deployment platform | Modular monolith + managed services (orchestration TBD at M9) | Planned |
