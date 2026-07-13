@@ -1,7 +1,7 @@
 # ExpertSeat — Security
 
-**Status**: Milestone 0 — Foundation
-**Date**: 2026-07-12
+**Status**: Milestone 0 — Foundation (audit remediation 2026-07-13)
+**Date**: 2026-07-13
 
 This document distinguishes between current security measures (implemented) and planned security measures (not yet implemented).
 
@@ -24,11 +24,26 @@ This document distinguishes between current security measures (implemented) and 
 
 - `.gitignore` prevents `.env` files from being committed
 - `.env.example` contains only safe placeholder values
-- GitHub repository is private
-- Dependencies are managed with lock files (pnpm lockfile, uv.lock)
-- Dependabot is configured for automated dependency vulnerability alerts
-- CI uses least-privilege permissions (`contents: read`)
+- **Repository is currently public** (changed from private on 2026-07-13 per owner decision; see DECISIONS.md)
+- Root `pnpm-lock.yaml` and `services/api/uv.lock` lock all dependency versions
+- Dependabot is configured for automated dependency update PRs (npm and pip)
+- CI uses least-privilege permissions (`contents: read` at workflow level)
 - No secrets are hardcoded anywhere in the codebase
+- Gitleaks runs against full git history on every PR and push in CI
+- Docker development ports bound to `127.0.0.1` only (not exposed on all interfaces)
+- GitHub Actions pinned to immutable commit SHAs (not mutable version tags)
+- `uv` version pinned in CI (`0.11.7`) for reproducible installs
+
+### Not Yet Implemented
+
+Everything in the sections below is planned but not implemented.
+
+### Known gaps at Milestone 0
+
+- **Branch protection on `main`**: Not configured. GitHub branch protection requires at least one push to the branch and may require a paid plan for some rule types. Document limitation only.
+- **GitHub Advanced Security (GHAS)**: Not available at current plan tier. Dependency Review workflow was removed because it permanently failed without GHAS. Gitleaks is used instead for secret detection.
+- **Secret scanning by GitHub**: Not enabled (requires GHAS or enabling via repo settings if the plan supports it). Gitleaks in CI covers this gap.
+- **CI passes**: CI has not yet run on `fix/m0-audit-remediation`. This document will be updated to reflect actual CI results after the first run.
 
 ### Not Yet Implemented
 
@@ -185,7 +200,7 @@ We have not yet published a vulnerability disclosure policy. When the platform l
 - We will work with reporters to understand and fix issues before public disclosure
 - We will credit reporters (with their permission)
 
-For Milestone 0, the repository is private. If you discover a security issue, contact the repository owner directly.
+The repository is currently public. If you discover a security issue, please open a private security advisory via the GitHub Security tab rather than a public issue, or contact the repository owner directly.
 
 ---
 

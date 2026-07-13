@@ -23,23 +23,24 @@ Decisions are numbered chronologically. Once recorded, decisions are not deleted
 
 ---
 
-## ADR-002: Next.js 14 with App Router
+## ADR-002: Next.js with App Router
 
 **Date**: 2026-07-12
+**Revised**: 2026-07-13 (Milestone 0 audit — upgraded from 14 to 16)
 **Status**: Accepted
 
 **Context**: The frontend is a recruiter-facing web application. Server-side rendering and good TypeScript support are important.
 
-**Decision**: Next.js 14 with App Router (RSC-first).
+**Decision**: Next.js 16 (Active LTS) with App Router (RSC-first), React 19, Node.js 24 LTS.
 
-**Reason**: App Router is the stable, recommended path for new Next.js projects. RSC reduces client bundle size. Strong ecosystem, good TypeScript integration.
+**Reason**: App Router is the stable, recommended path for new Next.js projects. RSC reduces client bundle size. Strong ecosystem, good TypeScript integration. Next.js 14 was initially selected but is no longer actively supported; Next.js 16 is the current Active LTS release. Tailwind CSS v4 is now the default with Next.js 16 via Turbopack. ESLint 9 flat config required by eslint-config-next 16.x.
 
 **Alternatives considered**:
 - Remix: strong candidate, but Next.js has broader ecosystem and more deployment options.
 - Vite + React SPA: no SSR, no RSC; rejected.
 - SvelteKit: considered but TypeScript ecosystem for our team is better in React.
 
-**Consequences**: RSC patterns require careful attention to client vs. server component boundaries. Some libraries are not yet compatible.
+**Consequences**: RSC patterns require careful attention to client vs. server component boundaries. Some libraries are not yet compatible. ESLint 9 flat config requires maintaining `eslint.config.js` instead of `.eslintrc.json`.
 
 ---
 
@@ -332,21 +333,19 @@ Decisions are numbered chronologically. Once recorded, decisions are not deleted
 
 ---
 
-## ADR-018: No AI voice synthesis
+## ADR-018: No AI voice synthesis ⚠️ SUPERSEDED by ADR-020
 
 **Date**: 2026-07-12
-**Status**: Accepted (product principle)
+**Superseded**: 2026-07-13 by ADR-020
+**Status**: Superseded
 
-**Context**: AI voice synthesis could make the agent seem more human, potentially increasing deception risk even when disclosed.
+**Context**: At initial foundation, AI voice synthesis was considered potentially deceptive even when disclosed.
 
-**Decision**: ExpertSeat will not implement AI voice synthesis for Role Agents.
+**Original decision**: ExpertSeat will not implement AI voice synthesis for Role Agents.
 
-**Reason**: Synthetic voice increases the risk of candidate confusion about whether they are speaking with a human, even when disclosure is present. The product benefit does not outweigh this risk.
+**Why superseded**: The Master Project Specification clarifies that Zoom participation requires two-way audio: the Role Agent must receive meeting audio (for transcription) and return synthesized speech (TTS) to the meeting. A text-chat-only agent is not the target product. Disclosed TTS with a clearly named AI participant is the required approach. ADR-020 records the corrected decision.
 
-**Alternatives considered**:
-- Text-to-speech for accessibility: may be reconsidered for accessibility use cases only, with clear UI labeling.
-
-**Consequences**: Agents communicate via text in all meeting integrations.
+**See**: ADR-020 (Disclosed text-to-speech for Zoom participation)
 
 ---
 
@@ -367,3 +366,94 @@ Decisions are numbered chronologically. Once recorded, decisions are not deleted
 - GitLab CI: would require platform migration.
 
 **Consequences**: CI runs on GitHub-hosted runners. We are subject to GitHub Actions pricing and uptime. Secrets managed via GitHub repository secrets.
+
+---
+
+## ADR-020: Disclosed text-to-speech for Zoom participation
+
+**Date**: 2026-07-13
+**Status**: Accepted
+**Supersedes**: ADR-018
+
+**Context**: ExpertSeat's target product requires AI Role Agents to participate verbally in live Zoom interviews — not as a text-only chat participant. The Zoom integration must capture audio from the meeting (for transcription) and return AI-generated speech to the meeting. Without TTS, the product does not achieve its stated goal of adding an AI expert as a verbal interview panelist.
+
+**Decision**: ExpertSeat will implement disclosed text-to-speech for Role Agent verbal participation in Zoom meetings. The following constraints are non-negotiable:
+
+1. The participant is clearly named as AI (e.g., "ExpertSeat — AI Panelist") in the meeting interface.
+2. No generated humanlike video avatar. A static profile image is acceptable.
+3. The agent joins muted by default. Recruiters control activation.
+4. Recruiters control every agent speech event (activate, mute, deactivate, takeover).
+5. TTS voice must not be designed to impersonate a specific human.
+6. No voice-confidence, accent, emotion, or personality scoring of candidates is permitted.
+7. No inference about candidate characteristics from voice other than the spoken content transcription.
+
+**Reason**: Without TTS, Zoom participation cannot deliver on the product's core proposition. Disclosed TTS with explicit recruiter control and a named AI participant preserves the product's ethical requirements while enabling verbal participation. The risks of deception are addressed by the disclosure and control requirements, not by eliminating audio.
+
+**Alternatives considered**:
+- Text-only chat participation: does not meet the target product specification; the agent cannot ask questions verbally or participate naturally in a live panel.
+- Human voice actor reading AI output: impractical at scale and raises its own disclosure concerns.
+- No Zoom integration: would require a different meeting product; deferred to feasibility spike evaluation.
+
+**Consequences**: TTS provider selection becomes an architecture decision (Milestone 6). Provider must be evaluated against latency, quality, and data-usage terms. Candidate consent disclosure must specify that AI speech is synthesized. TTS latency and interruption behavior must be tested in the feasibility spike (Milestone 6) before committing to the full Zoom integration (Milestone 7).
+
+---
+
+## ADR-021: Zoom first, Webex later, Google Meet out of scope
+
+**Date**: 2026-07-13
+**Status**: Accepted
+
+**Context**: Multiple meeting platforms are in use by enterprise customers. The roadmap must state clearly which platforms are targeted and in what order.
+
+**Decision**:
+- Zoom is the first meeting platform to integrate (Milestone 7).
+- Webex may be added after Zoom is stable in production. It is not committed.
+- Google Meet is explicitly out of scope for the initial MVP and is not in the committed roadmap.
+
+**Reason**: Zoom has more mature bot SDK options and a larger enterprise install base among the initial target customers. Committing to multiple platforms simultaneously increases complexity and risk. Google Meet's programmatic bot access model differs significantly and requires a separate feasibility evaluation.
+
+**Alternatives considered**:
+- Google Meet first: meet's bot APIs require different architecture; not yet validated.
+- All platforms simultaneously: too much scope; deferred.
+- Teams: may be evaluated post-pilot; not committed.
+
+**Consequences**: Milestone 6 (Zoom feasibility spike) must succeed before Milestone 7 begins. If the Zoom integration proves infeasible, the decision on which platform to try next must be made at that time and recorded as an ADR update.
+
+---
+
+## ADR-022: Browser interview simulator before Zoom integration
+
+**Date**: 2026-07-13
+**Status**: Accepted
+
+**Context**: The Zoom integration is technically risky (two-way audio, waiting-room behavior, platform review). The interview engine (Role Agent questions, evidence tracking, recruiter controls, report generation) must be proven before connecting it to a live meeting platform.
+
+**Decision**: The browser-based interview simulator (Milestone 4) must be completed and accepted before the Zoom feasibility spike (Milestone 6). No Zoom integration work begins until the simulator milestone has passed its exit criteria.
+
+**Reason**: If the interview engine has fundamental problems, those must be discovered and fixed in a low-risk controlled environment (the simulator) rather than during a live Zoom session. This separation also ensures that the MeetingConnector abstraction is clean — the interview engine is proved first, then connected to Zoom without changes to the core interview logic.
+
+**Alternatives considered**:
+- Develop Zoom integration in parallel with the simulator: risks propagating engine bugs into a harder-to-test context.
+- Skip the simulator and go straight to Zoom: dramatically increases integration risk.
+
+**Consequences**: The overall timeline to Zoom integration is longer than if both were developed in parallel. This is an intentional trade-off for reliability.
+
+---
+
+## ADR-023: Dependency Review workflow replaced by Gitleaks
+
+**Date**: 2026-07-13
+**Status**: Accepted
+
+**Context**: The initial CI included `actions/dependency-review-action`, which requires GitHub Advanced Security (GHAS). GHAS is not available at the current repository plan tier. The workflow failed on every PR.
+
+**Decision**: Remove the `dependency-review.yml` workflow. Replace secret detection with Gitleaks (`gitleaks/gitleaks-action`), which runs against full git history on every PR and push. Dependabot continues to provide automated dependency update PRs for npm and pip packages.
+
+**Reason**: A permanently failing workflow is worse than no workflow — it trains contributors to ignore CI failures. Gitleaks provides real secret detection without GHAS. Dependabot provides ongoing visibility into vulnerable dependencies.
+
+**Alternatives considered**:
+- Enable GHAS: not available at current plan.
+- Keep the failing workflow and document it: creates a habituation problem with red CI.
+- Trivy or Grype for SCA: valid alternatives; Gitleaks chosen first for secret scanning; SCA tools can be added separately.
+
+**Consequences**: Dependency vulnerability scanning is provided by Dependabot automated PRs rather than a block on every PR diff. If the plan is upgraded to include GHAS, the dependency-review workflow can be reinstated.

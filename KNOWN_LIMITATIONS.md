@@ -1,7 +1,7 @@
 # ExpertSeat — Known Limitations
 
-**As of**: Milestone 0 (Foundation)
-**Date**: 2026-07-12
+**As of**: Milestone 0 (Foundation — audit remediation 2026-07-13)
+**Date**: 2026-07-13
 
 This document is an honest statement of what ExpertSeat does and does not do.
 
@@ -11,7 +11,7 @@ This document is an honest statement of what ExpertSeat does and does not do.
 
 As of Milestone 0, ExpertSeat is a repository foundation. The following are implemented:
 
-- **Next.js 14 frontend**: A single-page application that displays the ExpertSeat name and a description. No interactive functionality.
+- **Next.js 16 frontend**: A single-page application that displays the ExpertSeat name and a description. No interactive functionality.
 - **FastAPI backend**: Two health check endpoints (`/api/v1/health/live` and `/api/v1/health/ready`). No business logic.
 - **PostgreSQL database**: Running via Docker Compose. No schema exists yet.
 - **Redis**: Running via Docker Compose. Not used by the application yet.
@@ -36,12 +36,21 @@ As of Milestone 0, ExpertSeat is a repository foundation. The following are impl
 - Interview sessions (text or video)
 - Report generation
 - Human review workflow
-- Meeting connector integrations (Zoom, Google Meet)
+- Meeting connector integrations (Zoom is planned; Google Meet is not in scope)
 - Audit logging
 - Data retention controls
 - Candidate portal
 - ATS integrations
 - Production deployment
+
+---
+
+## Process Limitations (Milestone 0)
+
+- **Branch protection on `main`**: Not configured — GitHub plan limitations prevent some rule types; documented in SECURITY.md.
+- **Dependency Review (GitHub Advanced Security)**: GHAS is not available at the current plan tier. Dependency Review workflow was removed and replaced with Gitleaks secret scanning. Dependabot provides dependency vulnerability alerts.
+- **Original PR #7 is non-reviewable**: All foundation commits went directly to `main`; PR #7 shows only a single file. The audit remediation branch `fix/m0-audit-remediation` is the correct review target.
+- **Repository is public**: Changed from private (original spec) to public on 2026-07-13 per owner decision.
 
 ---
 

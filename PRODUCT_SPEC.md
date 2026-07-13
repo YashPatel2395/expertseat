@@ -50,9 +50,19 @@ A Role Agent is not a general-purpose AI assistant. Its scope is strictly limite
 
 ### 3.3 Custom vs. Verified Blueprints
 
-**Custom Blueprints** are created by the recruiter's organization. They are unaudited and may reflect the organization's own biases or gaps. Organizations bear responsibility for their content.
+**Custom Blueprints** are created by the recruiter's organization. They are unaudited and may reflect the organization's own biases or gaps. Organizations bear responsibility for their content. Custom Blueprints must never be labeled or presented as independently validated.
 
-**Verified Blueprints** (planned, Milestone 4+) are reviewed by ExpertSeat against a quality rubric before publication to a shared library. Verification does not guarantee fairness or correctness — it confirms that the blueprint meets structural and quality standards.
+**Verified Domain Blueprints** (planned, post-pilot) require a substantially higher standard:
+- Reviewed by qualified domain experts in the relevant profession
+- Validated competencies mapped to actual job requirements
+- Questions and scenarios independently reviewed for relevance and fairness
+- Rubrics and answer indicators tested against known-good human assessments
+- Measured agreement between AI evaluations and qualified human evaluator scores
+- Re-validated when major domain changes occur
+
+A structural checklist alone does not constitute Verification. Verified status means ExpertSeat has completed the above steps for that domain and is prepared to defend the rubric. Verified Blueprints cover only the specific domain reviewed — a Verified Blueprint for one profession says nothing about another.
+
+Verified Blueprints are architecturally possible from the start (the schema supports the status flag), but no domain will be marked Verified until the full review process has been completed.
 
 ### 3.4 Evidence
 
@@ -101,29 +111,50 @@ No ExpertSeat output flows to a hiring decision without human review. Specifical
 
 ---
 
-## 7. MVP Scope (Milestone 3)
+## 7. MVP Scope
 
-The MVP includes:
+The MVP is defined across Milestones 1–7 (authentication through Zoom integration). Key capabilities per milestone:
+
+### Milestones 1–3 (foundation features)
 - Organization and user accounts (recruiter role only)
-- Blueprint creation and versioning
-- Candidate record management
-- Interview scheduling with consent flow
-- Role Agent interview participation via web (text-based, no live video in MVP)
-- Structured report generation
-- Human review workflow with observation acceptance/rejection
-- Basic audit logging
+- Domain-agnostic Blueprint creation and immutable versioning
+- Candidate record management and consent workflow
+- Interview scheduling with consent gate
+
+### Milestone 4 (browser interview simulator — must precede Zoom)
+- Complete end-to-end interview flow in the browser (no live video)
+- Role Agent question generation from blueprint + evidence
+- Evidence citation tracking — every agent output linked to a source
+- "No evidence, no score" enforcement
+- Recruiter activation and deactivation controls
+- Post-interview structured report generation
+- Human review workflow with observation accept/modify/reject
+
+### Milestone 6 (Zoom feasibility spike — must precede full integration)
+- Prove two-way audio, waiting-room handling, and bot identity in a real Zoom meeting
+
+### Milestone 7 (Zoom integration — MVP meeting behavior)
+The MVP Zoom meeting behavior includes all of the following. None are optional:
+- AI joins as a visible, named participant ("ExpertSeat — AI Panelist")
+- Static profile image (no generated video avatar)
+- Incoming meeting audio captured for live transcription (speech-to-text)
+- Disclosed text-to-speech: AI speech returned to the meeting, recruiter-controlled
+- Agent joins muted; recruiter activates when ready
+- Recruiter can mute/unmute the agent at any time
+- Recruiter can take over (deactivate agent) at any time
+- Reconnection and failure reporting surfaced to the recruiter control room
 
 ### 7.1 MVP Exclusions
 
-The following are explicitly out of scope for MVP:
-- Live video/audio integration (Milestone 5)
-- Verified Blueprint library (Milestone 4)
-- Multi-panelist collaborative scoring (Milestone 6)
-- Candidate portal / self-service (Milestone 7)
-- ATS integrations (Milestone 8)
-- Mobile clients (post-MVP)
-- Real-time transcription (Milestone 5)
-- AI voice synthesis (not planned — considered high risk)
+The following are explicitly out of scope for the initial MVP:
+- Verified Blueprint library or marketplace
+- Candidate portal / self-service access
+- ATS integrations (Lever, Greenhouse, Workday)
+- Google Meet connector (out of scope)
+- Webex connector (not committed; may follow after Zoom is stable)
+- Multi-panelist collaborative scoring beyond the Role Agent
+- Mobile clients
+- Autonomous hiring decisions or any automated decision forwarding
 
 ---
 

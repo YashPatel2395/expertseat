@@ -36,7 +36,7 @@ See [ROADMAP.md](./ROADMAP.md) for the full milestone plan.
 
 ```
 expertseat/
-├── apps/web/           Next.js 14 frontend (App Router, TypeScript)
+├── apps/web/           Next.js 16 frontend (App Router, TypeScript, React 19)
 ├── services/api/       FastAPI backend (Python 3.12)
 ├── infrastructure/     Docker Compose for local services
 ├── scripts/            Developer utility scripts
@@ -48,8 +48,9 @@ expertseat/
 
 ## Prerequisites
 
-- Node.js 20+ and pnpm 8+
-- Python 3.12+ and uv
+- Node.js 24 LTS (`nvm install 24` or use `.nvmrc`)
+- pnpm 11+ (`corepack enable && corepack prepare pnpm@11 --activate`)
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - Docker and Docker Compose
 
 ---
@@ -86,15 +87,22 @@ make dev
 |---|---|
 | `make setup` | Install all frontend and backend dependencies |
 | `make dev-infra` | Start PostgreSQL and Redis via Docker Compose |
+| `make dev-infra-wait` | Start infrastructure and wait until health checks pass |
 | `make dev` | Print instructions for starting all dev servers |
-| `make migrate` | Run Alembic database migrations |
-| `make format` | Format Python (ruff) and TypeScript (prettier) code |
-| `make lint` | Lint Python (ruff) and TypeScript (eslint) code |
+| `make format` | Auto-format all code (ruff + prettier) |
+| `make format-check` | Check formatting without modifying files |
+| `make lint` | Lint Python (ruff) and TypeScript (eslint) |
 | `make typecheck` | Type-check Python (pyright) and TypeScript (tsc) |
 | `make test` | Run all tests (pytest + vitest) |
-| `make build` | Build the Next.js frontend |
-| `make check` | Full quality gate: lint + typecheck + test + build |
-| `make clean` | Stop Docker services and remove build caches |
+| `make migrate` | Apply Alembic migrations to head |
+| `make migrate-down` | Roll back all Alembic migrations |
+| `make migrate-full` | Upgrade → downgrade → upgrade (full cycle verification) |
+| `make build` | Production build of the Next.js frontend |
+| `make infra-validate` | Validate Docker Compose configuration (no services started) |
+| `make secret-scan` | Run Gitleaks secret scan against git history (requires gitleaks) |
+| `make check` | Complete quality gate (all 10 checks must pass) |
+| `make stop` | Stop Docker Compose services |
+| `make clean` | Stop services and remove build caches |
 
 ---
 
