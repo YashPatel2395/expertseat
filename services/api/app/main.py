@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
-from app.routers import auth, health
+from app.routers import auth, health, workspace
 
 # ─── Logging configuration ───────────────────────────────────────────────────
 # Must be called before any logger is used.
@@ -107,6 +107,7 @@ app.add_middleware(
 
 app.include_router(health.router, prefix=settings.api_v1_prefix)
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
+app.include_router(workspace.router, prefix=settings.api_v1_prefix)
 
 
 @app.exception_handler(Exception)
