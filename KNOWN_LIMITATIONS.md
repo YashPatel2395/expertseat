@@ -50,7 +50,7 @@ As of Milestone 0, ExpertSeat is a repository foundation. The following are impl
 - **Original PR #7 is non-reviewable**: All foundation commits went directly to `main`; PR #7 shows only a single file. The audit remediation branch `fix/m0-audit-remediation` (PR #12) is the correct review target.
 - **Repository is public**: Changed from private (original spec) to public on 2026-07-13 per owner decision.
 - **Dependency Review (GitHub Advanced Security)**: GHAS is not available at the current plan tier. The `dependency-review.yml` workflow was removed. Proactive dependency scanning is provided by `pip-audit` (Python) and `pnpm audit --audit-level high` (npm), both run in CI. Dependabot provides reactive PR-based alerts.
-- **AI panel currently text-only**: No audio/TTS integration exists yet. The live Zoom meeting integration with AI-generated speech is planned for Milestones 6–8. The text-only simulator (Milestone 4) is the first functional interview experience.
+- **No AI panelist is implemented**: The AI Role Agent does not exist yet. Milestone 4 will introduce a text-based browser simulator as the first functional interview experience. Milestones 6–8 will validate and implement live Zoom participation with audio input and AI-generated speech. There is no audio/TTS integration at any milestone prior to that validation spike.
 
 ---
 

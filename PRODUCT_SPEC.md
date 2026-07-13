@@ -221,92 +221,255 @@ Separate from the live command bar. Available in the report review phase after t
 
 ## 10. Blueprint Schema
 
-A Blueprint has the following fields. All fields are stored on the `blueprints` and `blueprint_versions` tables.
+A Blueprint is a recruiter-authored specification stored across `blueprints` (the root record) and `blueprint_versions` (each versioned snapshot). Every field lives in a version. The root record holds only the identity anchor (`id`, `organization_id`) that is stable across all versions.
 
-### 10.1 Identity and Versioning
+Field numbering is removed at the global level; each sub-schema is self-contained. Nested types are defined below the table that references them.
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 1 | `id` | UUID | Immutable blueprint identifier |
-| 2 | `org_id` | UUID | Owning organization (immutable) |
-| 3 | `name` | string (255) | Human-readable blueprint name |
-| 4 | `version_number` | integer | Auto-incrementing version number |
-| 5 | `version_label` | string (100) | Optional human label (e.g., "v1.2 — updated rubrics") |
-| 6 | `lifecycle_status` | enum: `draft`, `under_review`, `validated`, `published`, `superseded`, `archived` | Current lifecycle state of this version |
-| 7 | `draft_created_at` | timestamp (UTC) | When this draft version was created |
-| 8 | `created_by` | UUID (user) | User who created this version |
-| 9 | `published_at` | timestamp (UTC) or null | When this version was published; null if not yet published |
-| 10 | `published_by` | UUID (user) or null | User who published this version; null if not yet published |
-| 11 | `superseded_at` | timestamp (UTC) or null | When this version was superseded; null if not superseded |
-| 12 | `superseded_by_version_id` | UUID or null | The version that superseded this one; null if not superseded |
-| 13 | `verified_status` | enum: `custom`, `verified` | Whether this blueprint has passed ExpertSeat's verification process |
-| 14 | `verified_at` | timestamp (UTC) | When verified status was granted; null for custom |
+**Guarantee**: A published Blueprint version is immutable. Any modification produces a new draft version. See Section 12.
 
-### 10.2 Role Context
+**Domain-agnostic guarantee**: No field in the Blueprint schema encodes profession-specific logic. Profession-specific knowledge lives entirely in recruiter-provided field values (text, arrays, references). The Role Agent engine and evaluation engine contain no profession-specific assumptions.
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 15 | `domain` | string (255) | Professional domain (e.g., "Backend Engineering", "Nursing", "Financial Advisory") |
-| 16 | `role_title` | string (255) | Specific role (e.g., "Staff Backend Engineer", "Consultant Level 2") |
-| 17 | `seniority_label` | string | Recruiter-facing label for the seniority of this role (any text, e.g. "Consultant Level 2", "Senior Staff Engineer") |
-| 18 | `seniority_band` | optional enum: `entry`, `mid`, `senior`, `expert`, `executive` | Generic broad band for cross-domain comparison; not profession-specific |
-| 19 | `minimum_experience` | integer | Minimum years of relevant experience required |
-| 20 | `preferred_experience` | integer | Preferred years of relevant experience |
-| 21 | `profession_specific_level` | optional string | Profession-specific designation where applicable (e.g., "P4", "Band 6 NHS", "Grade 7") |
-| 22 | `role_context_narrative` | text | Free-text description of role responsibilities, team context, and what the interview should assess |
-| 23 | `interview_language` | string (5) | BCP-47 language tag (e.g., "en-US"); determines STT/TTS language |
+---
 
-### 10.3 Evaluation Dimensions
+### 10.1 Blueprint Identity and Lifecycle
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 17 | `dimensions` | array of DimensionConfig | Ordered list of evaluation dimensions |
-| 18 | `DimensionConfig.id` | string | Unique within blueprint (e.g., "dim_system_design") |
-| 19 | `DimensionConfig.name` | string | Human-readable dimension name |
-| 20 | `DimensionConfig.weight` | float (0–1) | Weight for aggregate score; all weights must sum to 1.0 if aggregate score is enabled |
-| 21 | `DimensionConfig.description` | text | What this dimension measures |
-| 22 | `DimensionConfig.rubric` | object (score_1 through score_5) | Rubric descriptors for each score level; used by agent for scoring rationale |
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Immutable blueprint identifier — stable across all versions |
+| `organization_id` | UUID | Owning organization — immutable |
+| `name` | string (255) | Human-readable blueprint name |
+| `summary` | text | Short description for recruiter dashboard display |
+| `version_number` | integer | Auto-incrementing integer; increments with each new draft |
+| `version_label` | string (100) | Optional human label (e.g., "v2 — updated systems design rubric") |
+| `lifecycle_status` | enum | `draft` → `under_review` → `validated` → `published` → `superseded` → `archived` |
+| `verification_status` | enum | `custom` or `verified`; verified requires ExpertSeat review (post-pilot) |
+| `draft_created_at` | timestamp (UTC) | When this draft version was created |
+| `created_by` | UUID (user) | User who created this version |
+| `published_at` | timestamp (UTC) or null | When this version was published; null if unpublished |
+| `published_by` | UUID (user) or null | User who published this version; null if unpublished |
+| `superseded_at` | timestamp (UTC) or null | When this version was superseded; null if not superseded |
+| `superseded_by_version_id` | UUID or null | Version that superseded this one |
+| `archived_at` | timestamp (UTC) or null | When this version was archived; null if not archived |
 
-### 10.4 Question Bank
+---
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 23 | `questions` | array of QuestionConfig | Ordered list of interview questions |
-| 24 | `QuestionConfig.id` | string | Unique within blueprint |
-| 25 | `QuestionConfig.question_text` | text | The question text the agent will ask |
-| 26 | `QuestionConfig.dimension_id` | string | Which dimension this question is designed to assess |
-| 27 | `QuestionConfig.is_required` | boolean | Whether this question must be asked; non-required questions may be skipped if time runs short |
-| 28 | `QuestionConfig.expected_duration_minutes` | integer | Estimated time for this question and its follow-ups |
-| 29 | `QuestionConfig.follow_up_limit` | integer | Max number of follow-up questions the agent may ask before moving on |
-| 30 | `QuestionConfig.follow_up_guidance` | text | Optional guidance to agent on what to probe in follow-ups |
-| 31 | `QuestionConfig.answer_indicators` | array of string | Optional list of content indicators a strong answer should include (not revealed to candidate) |
+### 10.2 Profession and Role Context
 
-### 10.5 Behavioral Constraints
+All fields are free-form text or optional enums. No field encodes profession-specific validation logic.
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 32 | `agent_tone` | enum: `professional`, `conversational`, `technical` | Overall tone for agent interactions |
-| 33 | `max_total_follow_ups` | integer | Global cap on follow-up questions across the entire interview |
-| 34 | `time_limit_minutes` | integer | Maximum interview duration; agent wraps up gracefully at the limit |
-| 35 | `allow_adaptive_questions` | boolean | Whether agent may generate new questions not in the question bank based on candidate responses |
-| 36 | `adaptive_question_dimension_scope` | array of dimension IDs | If adaptive questions enabled, which dimensions the agent may generate adaptive questions for |
+| Field | Type | Description |
+|---|---|---|
+| `profession` | string (255) | Professional domain (e.g., "Backend Engineering", "Nursing", "Financial Advisory") |
+| `specialization` | string (255) | Specialization within the profession (e.g., "Distributed Systems", "Critical Care", "Pension Advisory") |
+| `role_title` | string (255) | Specific role title (e.g., "Staff Backend Engineer", "Consultant Level 2") |
+| `department` | string (255) | Organizational department or team context |
+| `seniority_label` | string | Recruiter-facing label for seniority (any free-form text, e.g. "Senior Staff", "Band 6 NHS") |
+| `seniority_band` | optional enum | Generic cross-domain band: `entry` / `mid` / `senior` / `staff` / `principal` / `executive` |
+| `profession_specific_level` | optional string | Profession-specific level code where applicable (e.g., "IC5", "P4", "Grade 7", "Banda 6 NHS") |
+| `minimum_experience` | optional integer | Minimum years of relevant experience required (lower bound) |
+| `preferred_experience` | optional integer | Preferred years of relevant experience |
+| `education_requirements` | optional text | Education requirements for this role, if any (free text; may be null) |
+| `required_licenses` | array of string | Licenses required before employment (e.g., "SIA Door Supervisor", "CIMA") |
+| `preferred_licenses` | array of string | Licenses preferred but not required |
+| `required_certifications` | array of string | Certifications required (e.g., "AWS Solutions Architect Associate") |
+| `preferred_certifications` | array of string | Certifications preferred but not required |
+| `regulatory_environment` | optional text | Regulatory or compliance environment relevant to the role (e.g., "FCA regulated", "HIPAA", "ISO 27001") |
+| `primary_responsibilities` | array of string | Key responsibilities the candidate will own in this role |
+| `expected_first_six_month_outcomes` | array of string | Concrete outcomes expected in the first six months |
+| `independent_decision_expectations` | optional text | Description of what decisions the candidate is expected to make independently |
+| `risk_level` | optional enum | `low` / `medium` / `high` / `critical` — operational or reputational risk if the role is filled incorrectly |
 
-### 10.6 Evidence Sources
+---
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 37 | `evidence_sources` | array of EvidenceSourceConfig | Which evidence sources are permitted for this blueprint |
-| 38 | `EvidenceSourceConfig.source_type` | enum: `job_description`, `resume`, `reference_doc`, `transcript` | Source type |
-| 39 | `EvidenceSourceConfig.required` | boolean | Whether this source must be provided before the interview can be activated |
+### 10.3 Competencies
 
-### 10.7 Output Configuration
+A Blueprint defines an ordered list of evaluation competencies. Each competency is independent; no global evaluation logic is encoded in the schema.
 
-| # | Field | Type | Description |
-|---|---|---|---|
-| 40 | `show_aggregate_score` | boolean | Whether to display a weighted aggregate score in the report |
-| 41 | `report_include_transcript` | boolean | Whether the full transcript is appended to the report |
-| 42 | `report_include_follow_up_log` | boolean | Whether follow-up question log is included in the report |
-| 43 | `observation_format` | enum: `structured`, `narrative` | Whether observations are output as structured fields or narrative paragraphs |
+**BlueprintCompetencies**
+
+| Field | Type | Description |
+|---|---|---|
+| `required_competencies` | array of CompetencyConfig | Competencies that must be assessed in every interview |
+| `preferred_competencies` | array of CompetencyConfig | Competencies assessed if time permits |
+
+**CompetencyConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Unique within blueprint (e.g., `comp_distributed_systems`) |
+| `name` | string | Human-readable competency name |
+| `description` | text | What this competency measures and why it matters for this role |
+| `mandatory` | boolean | Must this competency be evaluated for the interview to be scoreable? |
+| `weight` | float (0.0–1.0) | Weight for aggregate score calculation; weights across all competencies must sum to 1.0 if aggregate scoring is enabled |
+| `required_depth` | enum | `awareness` / `working` / `proficient` / `expert` — expected depth for this role |
+| `evaluation_method` | enum | `question_and_answer` / `scenario` / `case_study` / `demonstration` |
+| `evidence_requirements` | text | What constitutes adequate evidence for this competency |
+| `mandatory_gap_behavior` | enum | `block_pass` / `flag_for_review` / `record_only` — what the system does if a mandatory competency has insufficient evidence |
+
+---
+
+### 10.4 Professional Tools and Frameworks
+
+All values are Blueprint data. No profession-specific validation logic exists in the evaluation engine.
+
+| Field | Type | Description |
+|---|---|---|
+| `required_tools` | array of string | Tools the candidate must have hands-on experience with |
+| `preferred_tools` | array of string | Tools preferred but not required |
+| `systems` | array of string | Systems or platforms relevant to this role (e.g., "Kubernetes", "SAP", "Epic EMR") |
+| `methods` | array of string | Methods or approaches required (e.g., "Agile", "PRINCE2", "Evidence-Based Practice") |
+| `standards` | array of string | Standards the candidate must know or work to (e.g., "ISO 27001", "IEC 62443", "NICE Guidelines") |
+| `regulations` | array of string | Regulatory frameworks relevant to this role (e.g., "GDPR", "FCA COBS", "HIPAA") |
+| `professional_codes` | array of string | Professional codes of conduct or ethics (e.g., "NMC Code", "ACM Code of Ethics") |
+| `frameworks` | array of string | Frameworks the candidate should be familiar with (e.g., "TOGAF", "ITIL", "SOC 2") |
+
+---
+
+### 10.5 Interview Design
+
+| Field | Type | Description |
+|---|---|---|
+| `interview_duration` | integer (minutes) | Maximum duration of the interview |
+| `question_budget` | integer | Maximum number of questions (primary + follow-up) across the interview |
+| `required_questions` | array of QuestionConfig | Questions the agent must ask in every session |
+| `optional_questions` | array of QuestionConfig | Questions asked if time permits, after required questions are complete |
+| `scenario_bank` | array of ScenarioConfig | Scenario descriptions the agent may present (referencing questions in question bank) |
+| `question_bank` | array of QuestionConfig | All questions; required and optional arrays reference entries here by ID |
+| `follow_up_rules` | text | Free-text rules governing when and how the agent probes for more detail |
+| `follow_up_limits` | object | Per-competency follow-up limits; overrides the per-question limit when set |
+| `adaptive_question_boundaries` | AdaptiveConfig | Configuration for agent-generated questions not in the question bank |
+| `difficulty` | enum | `introductory` / `standard` / `rigorous` / `specialist` |
+| `tone` | enum | `professional` / `conversational` / `technical` / `supportive` |
+| `prohibited_topics` | array of string | Topics the agent must not raise (e.g., legally protected characteristics) |
+| `interview_language` | string (BCP-47) | Language for STT/TTS (e.g., `en-US`, `fr-FR`) |
+
+**QuestionConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Unique within blueprint |
+| `competency_id` | string | Competency this question is designed to assess |
+| `question_text` | text | Exact question the agent will deliver |
+| `purpose` | text | Why this question is included and what the recruiter wants to learn from it |
+| `required` | boolean | Whether this question must be asked |
+| `expected_duration` | integer (minutes) | Estimated time including follow-ups |
+| `follow_up_limit` | integer | Maximum follow-up probes for this question |
+| `follow_up_guidance` | text | Agent guidance on what to probe, what counts as evasion, when to move on |
+| `strong_answer_indicators` | array of string | Content a strong answer should include (not shown to candidate) |
+| `acceptable_answer_indicators` | array of string | Content a passing answer should include |
+| `weak_answer_indicators` | array of string | Patterns that suggest a weak or incomplete answer |
+| `critical_failure_indicators` | array of string | Content that indicates a fundamental gap (e.g., patient safety breach, security ignorance) |
+| `scenario_config` | optional ScenarioConfig | If this question is presented as a scenario, its configuration |
+
+**ScenarioConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `scenario_id` | string | Unique identifier |
+| `scenario_text` | text | The scenario description presented to the candidate |
+| `context_documents` | array of string | References to evidence source documents providing scenario context |
+| `expected_approach` | text | Guidance to agent on what approach or reasoning the recruiter is looking for |
+
+**AdaptiveConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | boolean | Whether the agent may generate questions not in the question bank |
+| `competency_scope` | array of competency IDs | Which competencies adaptive questions may target |
+| `max_adaptive_questions` | integer | Hard limit on total adaptive questions across the interview |
+
+---
+
+### 10.6 Evaluation Policy
+
+| Field | Type | Description |
+|---|---|---|
+| `rubric` | map of competency_id → RubricConfig | Scoring rubric for each competency |
+| `scoring_scale` | object | `min`, `max`, and label descriptions for each integer score level |
+| `evidence_requirements` | text | Minimum evidence standard before any score may be assigned |
+| `deal_breakers` | array of string | Conditions that automatically result in a failed interview regardless of other scores |
+| `insufficient_evidence_behavior` | enum | `flag_and_omit` / `block_report` — what happens when insufficient evidence is found |
+| `aggregate_score_config` | optional AggregateConfig | Configuration for weighted average across competencies; null if disabled |
+| `report_structure` | ReportStructureConfig | What sections appear in the generated report |
+| `reviewer_override_policy` | enum | `allow_with_reason` / `require_justification` — constraints on human reviewer override |
+
+**RubricConfig** (per competency)
+
+| Field | Type | Description |
+|---|---|---|
+| `score_1_label` | string | Label for score 1 (minimum) |
+| `score_1_description` | text | What a score-1 answer demonstrates |
+| `score_2_label` | string | Label for score 2 |
+| `score_2_description` | text | What a score-2 answer demonstrates |
+| `score_3_label` | string | Label for score 3 (passing threshold) |
+| `score_3_description` | text | What a score-3 answer demonstrates |
+| `score_4_label` | string | Label for score 4 |
+| `score_4_description` | text | What a score-4 answer demonstrates |
+| `score_5_label` | string | Label for score 5 (maximum) |
+| `score_5_description` | text | What a score-5 answer demonstrates |
+
+**AggregateConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | boolean | Whether to display a weighted aggregate score in reports |
+| `label` | string | Human-readable label for the aggregate (e.g., "Overall Evaluation") |
+| `display_as` | enum | `numeric` / `percentage` / `band_label` |
+
+**ReportStructureConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `include_transcript` | boolean | Include full transcript in report |
+| `include_follow_up_log` | boolean | Include follow-up question log |
+| `include_competency_summary` | boolean | Include per-competency summary section |
+| `include_evidence_index` | boolean | Include an index of all evidence citations |
+| `observation_format` | enum | `structured` / `narrative` |
+
+---
+
+### 10.7 Controls and Safety
+
+| Field | Type | Description |
+|---|---|---|
+| `recruiter_control_policy` | RecruiterControlPolicy | Which live control room commands are available for this Blueprint |
+| `agent_behavioral_constraints` | text | Free-text instructions constraining agent behavior beyond defaults |
+| `safety_constraints` | array of string | Hard constraints the agent must not violate (e.g., "Do not discuss compensation") |
+| `disclosure_requirements` | text | Required disclosures the agent must make at session start |
+| `consent_requirements` | ConsentConfig | Consent collection configuration for this Blueprint |
+| `recording_config` | RecordingConfig | What is recorded and how |
+| `retention_policy_reference` | optional string | Reference to the organization's data retention policy; no defaults are set by ExpertSeat |
+
+**RecruiterControlPolicy**
+
+| Field | Type | Description |
+|---|---|---|
+| `allow_pause` | boolean | Recruiter may pause the agent |
+| `allow_skip_question` | boolean | Recruiter may skip to the next question |
+| `allow_add_question` | boolean | Recruiter may inject an ad-hoc question |
+| `allow_mute_agent` | boolean | Recruiter may mute the agent |
+| `allow_unmute_agent` | boolean | Recruiter may unmute the agent |
+| `allow_takeover` | boolean | Recruiter may take over the question from the agent |
+| `allow_end_interview` | boolean | Recruiter may end the interview early |
+| `allow_force_follow_up` | boolean | Recruiter may force the agent to ask a specific follow-up |
+| `allow_skip_to_summary` | boolean | Recruiter may direct agent to wrap up and summarize |
+
+**ConsentConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `require_explicit_consent` | boolean | Whether explicit candidate consent is required before the interview begins |
+| `consent_script` | text | The exact consent language to be delivered to the candidate |
+| `recording_consent_required` | boolean | Whether consent to recording is required separately |
+| `ai_participation_disclosure` | text | The exact disclosure statement about AI participation |
+
+**RecordingConfig**
+
+| Field | Type | Description |
+|---|---|---|
+| `record_audio` | boolean | Whether audio is recorded |
+| `record_transcript` | boolean | Whether transcript is generated and stored |
+| `record_video` | boolean | Whether video is recorded (future; not in scope for Milestone 4) |
 
 ---
 
@@ -574,7 +737,7 @@ These are things ExpertSeat explicitly does not try to do:
 |---|---|---|
 | M0 | Foundation | Repo, Docker Compose, FastAPI skeleton, Next.js skeleton, CI, linting |
 | M1 | Auth | Organization model, user accounts, JWT auth, org isolation, RBAC skeleton |
-| M2 | Blueprint | Blueprint CRUD, versioning, schema validation, blueprint activation |
+| M2 | Blueprint | Blueprint CRUD, versioning, schema validation, Blueprint publication lifecycle |
 | M3 | Candidates/Interviews | Candidate records, interview scheduling, consent workflow, consent gate |
 | M4 | Browser Simulator | End-to-end interview in browser (no live video), agent question generation, evidence citation, "No evidence, no score" enforcement, recruiter controls, structured report generation, human review workflow |
 | M5 | Reporting | Report finalization, audit log, modification log, export, recording consent workflow, data retention policies |
@@ -712,7 +875,7 @@ The audit log captures the following event types (append-only, immutable):
 - Agent activated / deactivated / muted / unmuted
 - Observation created / approved / flagged / rejected / modified
 - Report finalized / re-opened / exported
-- Blueprint created / version activated
+- Blueprint version published
 - User authentication events
 - Org admin actions
 - Data retention deletion events

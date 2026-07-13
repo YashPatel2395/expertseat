@@ -78,41 +78,101 @@ def test_settings_cwd_independent(tmp_path, monkeypatch):
         os.chdir(original_cwd)
 
 
-def test_production_does_not_load_dotenv(tmp_path, monkeypatch):
-    """Production must skip the dotenv file even when a valid dotenv file is present.
+# ── Production dotenv tests ───────────────────────────────────────────────────
+#
+# These tests use a temporary .env file containing a unique sentinel DATABASE_URL.
+# They verify that production mode skips dotenv regardless of HOW production is
+# selected (environment variable or __init__ kwarg), and that development loads it.
 
-    Creates a temporary .env file containing a unique sentinel DATABASE_URL value.
-    When APP_ENV=production, Settings() must not load values from that file even
-    when explicitly pointed at it via _env_file.
 
-    Also proves that the same dotenv file IS loaded in development mode, and that
-    an explicit environment variable takes priority over dotenv in development.
-    """
-    # Create a temp .env with a sentinel DATABASE_URL not in the real environment.
+def test_development_loads_dotenv_sentinel(tmp_path, monkeypatch):
+    """Development Settings() must load DATABASE_URL from dotenv."""
     sentinel_env = tmp_path / ".env"
-    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:sentinel@localhost/from_dotenv\n")
-
-    # Ensure DATABASE_URL is absent from the real environment so the only dotenv
-    # source is our temp file.
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
     monkeypatch.delenv("DATABASE_URL", raising=False)
-
-    # ── Production: dotenv must be silently skipped ──────────────────────────
-    monkeypatch.setenv("APP_ENV", "production")
-    s_prod = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
-    assert "from_dotenv" not in s_prod.database_url, (
-        f"Production must not load DATABASE_URL from dotenv, got: {s_prod.database_url!r}"
-    )
-
-    # ── Development: dotenv must be loaded ───────────────────────────────────
     monkeypatch.setenv("APP_ENV", "development")
-    s_dev = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
-    assert "from_dotenv" in s_dev.database_url, (
-        f"Development must load DATABASE_URL from dotenv, got: {s_dev.database_url!r}"
+    s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
+    assert "from_dotenv" in s.database_url, (
+        f"Development must load DATABASE_URL from dotenv, got: {s.database_url!r}"
     )
 
-    # ── Explicit env var overrides dotenv in non-production ──────────────────
-    monkeypatch.setenv("DATABASE_URL", "postgresql://explicit:x@localhost/from_env")
-    s_override = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
-    assert "from_env" in s_override.database_url, (
-        f"Explicit env var must win over dotenv, got: {s_override.database_url!r}"
+
+def test_test_mode_may_load_dotenv_sentinel(tmp_path, monkeypatch):
+    """Test-mode Settings() must load DATABASE_URL from dotenv."""
+    sentinel_env = tmp_path / ".env"
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("APP_ENV", "test")
+    s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
+    assert "from_dotenv" in s.database_url, (
+        f"Test mode must load DATABASE_URL from dotenv, got: {s.database_url!r}"
     )
+
+
+def test_env_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
+    """APP_ENV=production in the OS environment must skip the dotenv file."""
+    sentinel_env = tmp_path / ".env"
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
+    # Provide explicit DATABASE_URL so production validation does not fail.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
+    monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
+    monkeypatch.setenv("APP_ENV", "production")
+    s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
+    assert "from_dotenv" not in s.database_url, (
+        f"Environment-selected production must not load dotenv, got: {s.database_url!r}"
+    )
+    assert "prod-host" in s.database_url
+
+
+def test_init_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
+    """Settings(app_env='production') must skip the dotenv file.
+
+    This verifies that init-kwarg production selection (not just OS env) triggers
+    the dotenv bypass. The check happens in settings_customise_sources before
+    any values are applied.
+    """
+    sentinel_env = tmp_path / ".env"
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    # Provide explicit DATABASE_URL so production validation does not fail.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
+    monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
+    s = Settings(app_env="production", _env_file=str(sentinel_env))  # type: ignore[call-arg]
+    assert "from_dotenv" not in s.database_url, (
+        f"Init-selected production must not load dotenv, got: {s.database_url!r}"
+    )
+    assert "prod-host" in s.database_url
+
+
+def test_explicit_env_var_overrides_dotenv_in_development(tmp_path, monkeypatch):
+    """An explicit environment variable must win over dotenv in development."""
+    sentinel_env = tmp_path / ".env"
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://explicit:x@localhost/from_env")
+    s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
+    assert "from_env" in s.database_url, (
+        f"Explicit env var must win over dotenv, got: {s.database_url!r}"
+    )
+
+
+def test_production_rejects_development_database_url(monkeypatch):
+    """Production must fail validation if DATABASE_URL is the development default.
+
+    This prevents accidental use of development credentials in production when
+    DATABASE_URL is simply not set in the environment.
+    """
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with pytest.raises(ValidationError, match="DATABASE_URL must be explicitly set in production"):
+        Settings()
+
+
+def test_production_rejects_development_redis_url(monkeypatch):
+    """Production must fail validation if REDIS_URL is the development default."""
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with pytest.raises(ValidationError, match="REDIS_URL must be explicitly set in production"):
+        Settings()

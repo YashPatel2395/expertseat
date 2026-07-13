@@ -249,6 +249,7 @@ A feature is "done" when:
    - **Infrastructure** (steps 18–23): Docker Compose up, PostgreSQL healthy, Redis healthy, migration upgrade, migration downgrade, migration re-upgrade
    - **Runtime** (steps 24–47): Uvicorn start, liveness 200, liveness exact body, readiness 200, both deps healthy, X-Request-ID valid UUID, PostgreSQL degradation (503), database unavailable in response, Redis still ok, PostgreSQL recovery, Redis degradation (503), Redis unavailable in response, database still ok, Redis recovery, both-down (503), both unavailable in response, liveness independent of deps
    - **Security** (steps 48–50): Gitleaks secret scan, pip-audit (Python CVEs), pnpm audit (npm CVEs)
-   - **Cleanup** (steps 51–54): Stop infrastructure, verify stopped, remove build artifacts, verify removed
-5. PR has been reviewed
-6. KNOWN_LIMITATIONS.md is updated if any limitations exist
+   - **Cleanup** (steps 51–54): Stop infrastructure, remove build artifacts
+5. A clean-clone verification has been performed for Milestone boundary commits: fresh clone, `make setup`, `make check`, frontend and backend started from README instructions, cleanup confirmed
+6. PR has been reviewed
+7. KNOWN_LIMITATIONS.md is updated if any limitations exist

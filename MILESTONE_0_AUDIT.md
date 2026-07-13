@@ -327,25 +327,45 @@ Round 2:
 
 ## 8. Branch Protection Evidence (2026-07-13)
 
-Branch protection on `main` is configured. The following was verified via the GitHub API:
+Branch protection on `main` is configured. Verified via the GitHub API on 2026-07-13:
 
 ```
 GET /repos/YashPatel2395/expertseat/branches/main/protection
+GET /repos/YashPatel2395/expertseat/branches/main/protection/required_pull_request_reviews
 ```
 
-**Required status checks** (strict: upstream must be up-to-date before merging):
-- Secret scan (Gitleaks)
-- Validate Docker Compose configuration
-- Frontend (format, lint, typecheck, test, build)
-- Backend (format, lint, typecheck, test)
-- Database migrations (upgrade → downgrade → upgrade)
-- Dependency vulnerability audit
-- API runtime smoke test
+**Branch**: `main`
 
-**Other protections**:
-- `enforce_admins`: `true` — restrictions apply to admins and owners
+**Required status checks**:
+- `strict`: `true` — upstream must be up-to-date before merging
+- Contexts (7 required checks):
+  1. Secret scan (Gitleaks)
+  2. Validate Docker Compose configuration
+  3. Frontend (format, lint, typecheck, test, build)
+  4. Backend (format, lint, typecheck, test)
+  5. Database migrations (upgrade → downgrade → upgrade)
+  6. Dependency vulnerability audit
+  7. API runtime smoke test
+
+**Pull request reviews**:
+- `required_pull_request_reviews`: configured — pull requests are required to merge
+- `required_approving_review_count`: `0` — single-person repository; status checks enforce quality
+- `dismiss_stale_reviews`: `false`
+- `require_code_owner_reviews`: `false`
+
+**Conversation resolution**:
+- `required_conversation_resolution`: `true` — all PR conversations must be resolved before merge
+
+**Commit controls**:
+- `enforce_admins`: `true` — restrictions apply to admins and repository owners; no bypass path
 - `allow_force_pushes`: `false` — force push to `main` is blocked
 - `allow_deletions`: `false` — `main` cannot be deleted
+
+**Direct push**:
+- Direct push to `main` is blocked by the combination of `required_pull_request_reviews` (PRs required) and `enforce_admins: true`. There is no bypass path for any user including the repository owner.
+
+**Restrictions** (push access control):
+- `restrictions`: `null` — no explicit push whitelist; access controlled entirely by pull request requirement and enforce_admins
 
 ---
 

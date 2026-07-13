@@ -33,6 +33,17 @@ UV_VER=$(uv --version | awk '{print $2}')
 echo "  uv: ${UV_VER}"
 [ "${UV_VER}" = "${PINNED_UV}" ] || { echo "ERROR: uv ${PINNED_UV} required, got ${UV_VER}"; exit 1; }
 
+# Gitleaks — must be present; version is recorded for audit evidence
+if command -v gitleaks >/dev/null 2>&1; then
+  GL_VER=$(gitleaks version 2>&1 | awk '{print $1}')
+  echo "  gitleaks: ${GL_VER}"
+  echo "  (reviewed version for audit: 8.30.1; installed: ${GL_VER})"
+else
+  echo "ERROR: gitleaks is not installed."
+  echo "  Install: brew install gitleaks"
+  exit 1
+fi
+
 echo "=== [versions] Installing dependencies ==="
 
 echo "  pnpm install --frozen-lockfile"

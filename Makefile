@@ -10,8 +10,8 @@ WEB_DIR  := apps/web
 
 # Install all dependencies (run once after clone)
 setup:
-	pnpm install
-	cd $(API_DIR) && uv sync --extra dev
+	pnpm install --frozen-lockfile
+	cd $(API_DIR) && uv sync --locked --extra dev
 
 # ─── Infrastructure ──────────────────────────────────────────────────────────
 

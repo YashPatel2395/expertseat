@@ -48,10 +48,22 @@ expertseat/
 
 ## Prerequisites
 
-- Node.js 24 LTS (`nvm install 24` or use `.nvmrc`)
-- pnpm 11.12.0 — installed via Corepack: `corepack enable pnpm && corepack prepare pnpm@11.12.0 --activate`
-- Python 3.12 and [uv](https://docs.astral.sh/uv/) 0.11.7+
-- Docker and Docker Compose
+- **Node.js 24** — `nvm install 24` or use `.nvmrc`
+- **pnpm 11.12.0** — via Corepack (bundled with Node.js): `corepack enable pnpm && corepack prepare pnpm@11.12.0 --activate`
+- **Python 3.12** — `pyenv install 3.12` or system package manager
+- **uv 0.11.7** — `pip install uv==0.11.7` or `brew install uv` then pin the version
+- **Docker and Docker Compose** — required for `make check` and local infrastructure
+- **Gitleaks 8.30.1** — `brew install gitleaks` (reviewed version: 8.30.1; newer versions accepted)
+
+Verify installed versions:
+```bash
+node --version          # v24.x.x
+pnpm --version          # 11.12.0
+python3 --version       # Python 3.12.x
+uv --version            # uv 0.11.7
+gitleaks version        # 8.30.1
+docker --version        # 27+ or Docker Desktop
+```
 
 ---
 
@@ -85,7 +97,7 @@ make dev
 
 | Command | Description |
 |---|---|
-| `make setup` | Install all frontend and backend dependencies |
+| `make setup` | Install all frontend and backend dependencies (locked — uses `--frozen-lockfile` and `--locked`) |
 | `make dev-infra` | Start PostgreSQL and Redis via Docker Compose |
 | `make dev-infra-wait` | Start infrastructure and wait until health checks pass |
 | `make dev` | Print instructions for starting all dev servers |
@@ -100,7 +112,7 @@ make dev
 | `make build` | Production build of the Next.js frontend |
 | `make infra-validate` | Validate Docker Compose configuration (no services started) |
 | `make secret-scan` | Run Gitleaks secret scan against git history (requires gitleaks) |
-| `make check` | Complete 54-step quality gate (versions, static analysis, infrastructure, runtime, security) |
+| `make check` | Complete 54-step quality gate — requires Docker running (versions, static analysis, infrastructure, runtime, security) |
 | `make stop` | Stop Docker Compose services |
 | `make clean` | Stop services and remove build caches |
 

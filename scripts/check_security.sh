@@ -13,6 +13,8 @@ echo "=== [security] Security scans ==="
 
 echo "  [48] Gitleaks — full git history secret scan"
 if command -v gitleaks >/dev/null 2>&1; then
+  GL_VER=$(gitleaks version 2>&1 | awk '{print $1}')
+  echo "  gitleaks version: ${GL_VER} (reviewed: 8.30.1)"
   gitleaks detect --source "${REPO_ROOT}" --log-level warn
   echo "  Gitleaks: no secrets found ✓"
 else
