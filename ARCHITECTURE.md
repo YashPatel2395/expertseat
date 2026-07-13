@@ -1,7 +1,7 @@
 # ExpertSeat — Architecture
 
 **Status**: Milestone 0 — Foundation only
-**Date**: 2026-07-12
+**Date**: 2026-07-13
 
 This document describes both the current (implemented) state and the planned architecture. Sections are clearly labeled.
 
@@ -13,7 +13,7 @@ The repository establishes a monorepo with two services and shared infrastructur
 
 ```
 expertseat/
-├── apps/web/         Next.js 14 (App Router, TypeScript strict)
+├── apps/web/         Next.js 16 (App Router, React 19, TypeScript strict, Node.js 24)
 ├── services/api/     FastAPI (Python 3.12)
 └── infrastructure/   Docker Compose (PostgreSQL 16, Redis 7)
 ```
@@ -137,7 +137,7 @@ class AIProvider(Protocol):
     async def embed(self, text: str) -> list[float]: ...
 ```
 
-Planned initial support: OpenAI GPT-4o, Anthropic Claude. The abstraction allows swapping providers per Blueprint or per org.
+Planned initial support: OpenAI and Anthropic Claude (specific models to be selected at Milestone 3 based on capability and pricing at that time). The abstraction allows swapping providers per Blueprint or per org.
 
 ---
 
@@ -241,7 +241,7 @@ See [DECISIONS.md](./DECISIONS.md) for full context on each decision.
 
 | Decision | Choice | Status |
 |---|---|---|
-| Frontend framework | Next.js 14 (App Router) | Decided |
+| Frontend framework | Next.js 16 (App Router, React 19, Node.js 24) | Decided |
 | Backend framework | FastAPI (Python 3.12) | Decided |
 | ORM | SQLAlchemy 2.0 | Decided |
 | Database | PostgreSQL 16 | Decided |

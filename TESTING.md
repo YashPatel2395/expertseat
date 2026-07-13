@@ -1,7 +1,7 @@
 # ExpertSeat — Testing Strategy
 
-**Status**: Milestone 0 — Foundation
-**Date**: 2026-07-12
+**Status**: Milestone 0 — Foundation (updated 2026-07-13)
+**Date**: 2026-07-13
 
 ---
 
@@ -37,10 +37,11 @@ Tests that exercise multiple layers together (router → service → database). 
 
 Tests that verify database migrations can be applied and rolled back cleanly.
 
-- Apply all migrations from scratch
-- Verify resulting schema matches model definitions
-- Roll back to previous revision
-- Planned for Milestone 1 when the first real schema migrations are written
+- Apply all migrations from scratch (`alembic upgrade head`)
+- Roll back all migrations (`alembic downgrade base`)
+- Re-apply all migrations (`alembic upgrade head`)
+- This full cycle runs in CI as the `migrations` job
+- Currently: one no-op placeholder migration. Real schema tests begin Milestone 1.
 
 ### Component Tests (Frontend)
 
@@ -68,13 +69,25 @@ Tests that evaluate Role Agent output quality.
 - These are probabilistic and require a defined threshold, not a binary pass/fail
 - Architecture for these tests is TBD
 
-### Meeting Integration Tests (Planned, Milestone 5)
+### Runtime Smoke Tests
 
-Tests that verify meeting connector behavior (Zoom join/leave, message delivery).
+Tests that start the actual Uvicorn server and make real HTTP requests. These verify that:
+- The application starts without import errors or configuration failures
+- Health endpoints respond with correct HTTP status codes
+- The readiness endpoint correctly reflects dependency health
+- The `X-Request-ID` response header is present on every response
+- The readiness endpoint returns 503 (degraded) when a dependency is unavailable
+
+These run in CI as the `runtime` job, with real PostgreSQL and Redis service containers. They complement unit tests by catching issues that only appear when the full stack is running (e.g., middleware ordering, CORS headers, port binding).
+
+### Meeting Integration Tests (Planned, Milestone 7 — Zoom integration)
+
+Tests that verify meeting connector behavior (Zoom join/leave, audio stream, message delivery).
 
 - Use Zoom's sandbox/developer environment
 - Isolated from production
 - Run manually before each release involving meeting connector changes
+- Zoom feasibility spike (Milestone 6) must validate the test approach before these are written
 
 ---
 
@@ -86,7 +99,8 @@ Tests that verify meeting connector behavior (Zoom join/leave, message delivery)
 services/api/tests/
 ├── conftest.py       — fixtures: TestClient with mocked database and Redis
 ├── test_health.py    — liveness and readiness endpoint tests
-└── test_config.py    — Settings validation tests
+└── test_config.py    — Settings validation: defaults, env overrides, CWD independence,
+                         timeout field existence, default DB URL password correctness
 ```
 
 Run:
@@ -151,23 +165,19 @@ cd apps/web && pnpm test --coverage
 
 ## CI Behavior
 
-On every push to `milestone/*` and every PR to `main`:
+On every push to `milestone/*`, `fix/*`, and every PR to `main`:
 
-1. Backend job:
-   - Start PostgreSQL service container
-   - Install dependencies with uv
-   - Run ruff lint
-   - Run pyright typecheck
-   - Run pytest
+| Job | What it does |
+|---|---|
+| `secret-scan` | Gitleaks against full git history — detects committed secrets |
+| `infra-validate` | `docker compose config --quiet` — validates compose syntax |
+| `frontend` | pnpm install, format check, lint, typecheck, test, build |
+| `backend` | uv sync, ruff format check, ruff lint, pyright, pytest, import check |
+| `migrations` | alembic upgrade → downgrade → re-upgrade (full cycle) |
+| `audit` | `pip-audit` (Python CVEs) + `pnpm audit --audit-level high` (npm CVEs) |
+| `runtime` | Start Uvicorn, verify `/health/live` 200, `/health/ready` 200, `X-Request-ID` present |
 
-2. Frontend job:
-   - Install dependencies with pnpm
-   - Run eslint
-   - Run tsc --noEmit
-   - Run vitest
-   - Run next build
-
-Both jobs must pass before the PR can be merged.
+All jobs must pass before a PR can be merged to `main`.
 
 ---
 

@@ -1,6 +1,6 @@
 # ExpertSeat — Security
 
-**Status**: Milestone 0 — Foundation (audit remediation 2026-07-13)
+**Status**: Milestone 0 — Foundation (Round 2 audit remediation 2026-07-13)
 **Date**: 2026-07-13
 
 This document distinguishes between current security measures (implemented) and planned security measures (not yet implemented).
@@ -29,21 +29,22 @@ This document distinguishes between current security measures (implemented) and 
 - Dependabot is configured for automated dependency update PRs (npm and pip)
 - CI uses least-privilege permissions (`contents: read` at workflow level)
 - No secrets are hardcoded anywhere in the codebase
-- Gitleaks runs against full git history on every PR and push in CI
+- Gitleaks runs against full git history on every PR and push in CI (secret detection — not CVE scanning)
+- `pip-audit` and `pnpm audit --audit-level high` run in CI for dependency CVE scanning (separate from Gitleaks)
 - Docker development ports bound to `127.0.0.1` only (not exposed on all interfaces)
-- GitHub Actions pinned to immutable commit SHAs (not mutable version tags)
+- GitHub Actions pinned to immutable commit SHAs (Node.js 24 runtime; no Node.js 20 deprecation warnings)
 - `uv` version pinned in CI (`0.11.7`) for reproducible installs
-
-### Not Yet Implemented
-
-Everything in the sections below is planned but not implemented.
+- Structured logging configured: JSON output in production, console output in development
+- Exception handler logs exception type only — never `str(exc)` which may contain sensitive data
+- Request ID middleware: UUID per request, bound to log context, returned in `X-Request-ID` header
+- Environment config resolves `.env` relative to repo root (not CWD) — deterministic across all invocation contexts
+- Health-check connection timeouts are bounded and configurable (no unbounded OS-level TCP timeouts)
+- Branch protection configured on `main`: required status checks, no force push, no direct push, no deletion
 
 ### Known gaps at Milestone 0
 
-- **Branch protection on `main`**: Not configured. GitHub branch protection requires at least one push to the branch and may require a paid plan for some rule types. Document limitation only.
-- **GitHub Advanced Security (GHAS)**: Not available at current plan tier. Dependency Review workflow was removed because it permanently failed without GHAS. Gitleaks is used instead for secret detection.
-- **Secret scanning by GitHub**: Not enabled (requires GHAS or enabling via repo settings if the plan supports it). Gitleaks in CI covers this gap.
-- **CI passes**: CI has not yet run on `fix/m0-audit-remediation`. This document will be updated to reflect actual CI results after the first run.
+- **GitHub Advanced Security (GHAS)**: Not available at current plan tier. Dependency Review workflow was removed because it permanently failed without GHAS. `pip-audit` + `pnpm audit` cover CVE scanning; Gitleaks covers secret detection.
+- **Secret scanning by GitHub**: Not enabled (requires GHAS). Gitleaks in CI covers this gap.
 
 ### Not Yet Implemented
 
