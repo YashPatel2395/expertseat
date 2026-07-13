@@ -49,9 +49,9 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 
 **Deliverables**:
 - [ ] Organization entity (name, slug, settings)
-- [ ] User entity (email, hashed password, role: recruiter/admin)
+- [ ] User entity (email, hashed password, role: admin/recruiter/reviewer)
 - [ ] JWT authentication (login, logout, token refresh)
-- [ ] Role-based access control (recruiter, org-admin)
+- [ ] Role-based access control: Admin, Recruiter, Reviewer
 - [ ] Organization isolation enforced at every query boundary
 - [ ] Audit log table for authentication events
 - [ ] Frontend: login page, protected route shell
@@ -62,7 +62,7 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 **Entry criteria**: Milestone 0 draft PR accepted and merged to main
 
 **Exit criteria**:
-- A recruiter can create an account, log in, and log out
+- An Admin or Recruiter can create an account, log in, and log out
 - All queries are scoped to the authenticated organization
 - Cross-organization access is rejected with 403
 - Auth endpoints documented

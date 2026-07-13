@@ -49,8 +49,8 @@ expertseat/
 ## Prerequisites
 
 - Node.js 24 LTS (`nvm install 24` or use `.nvmrc`)
-- pnpm 11+ (`corepack enable && corepack prepare pnpm@11 --activate`)
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- pnpm 11.12.0 — installed via Corepack: `corepack enable pnpm && corepack prepare pnpm@11.12.0 --activate`
+- Python 3.12 and [uv](https://docs.astral.sh/uv/) 0.11.7+
 - Docker and Docker Compose
 
 ---
@@ -100,7 +100,7 @@ make dev
 | `make build` | Production build of the Next.js frontend |
 | `make infra-validate` | Validate Docker Compose configuration (no services started) |
 | `make secret-scan` | Run Gitleaks secret scan against git history (requires gitleaks) |
-| `make check` | Complete quality gate (all 10 checks must pass) |
+| `make check` | Complete 54-step quality gate (versions, static analysis, infrastructure, runtime, security) |
 | `make stop` | Stop Docker Compose services |
 | `make clean` | Stop services and remove build caches |
 
@@ -133,4 +133,6 @@ make dev
 
 ## License
 
-Private — all rights reserved. See repository settings.
+Copyright 2026 Yash Patel. All rights reserved.
+
+This repository is public for transparency, portfolio, and review purposes. No license is granted to copy, use, modify, or distribute this software or its documentation without explicit written permission from the author.

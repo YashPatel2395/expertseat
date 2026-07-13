@@ -85,7 +85,7 @@ Everything in the sections below is planned but not implemented.
 
 ## Authorization (Planned, Milestone 1)
 
-- Role-based access control: `recruiter`, `org_admin`, `superadmin`
+- Role-based access control: `Admin`, `Recruiter`, `Reviewer` (org-level workspace roles); `superadmin` is a separate platform-level role distinct from org roles
 - All API endpoints require authentication except `/health/*`
 - All data queries include `organization_id` filter (enforced at repository layer)
 - PostgreSQL row-level security as defense-in-depth layer

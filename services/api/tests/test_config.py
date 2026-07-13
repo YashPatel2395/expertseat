@@ -78,18 +78,41 @@ def test_settings_cwd_independent(tmp_path, monkeypatch):
         os.chdir(original_cwd)
 
 
-def test_production_does_not_load_dotenv(monkeypatch):
-    """In production, Settings() must skip the .env file entirely.
+def test_production_does_not_load_dotenv(tmp_path, monkeypatch):
+    """Production must skip the dotenv file even when a valid dotenv file is present.
 
-    Sets APP_ENV=production and overrides DATABASE_URL to a sentinel that does
-    NOT appear in .env.  If .env were loaded, it would overwrite DATABASE_URL
-    with the dev value (which contains 'expertseat_dev'), causing this assertion
-    to fail.
+    Creates a temporary .env file containing a unique sentinel DATABASE_URL value.
+    When APP_ENV=production, Settings() must not load values from that file even
+    when explicitly pointed at it via _env_file.
+
+    Also proves that the same dotenv file IS loaded in development mode, and that
+    an explicit environment variable takes priority over dotenv in development.
     """
+    # Create a temp .env with a sentinel DATABASE_URL not in the real environment.
+    sentinel_env = tmp_path / ".env"
+    sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:sentinel@localhost/from_dotenv\n")
+
+    # Ensure DATABASE_URL is absent from the real environment so the only dotenv
+    # source is our temp file.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    # ── Production: dotenv must be silently skipped ──────────────────────────
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://sentinel:sentinel@localhost/sentinel")
-    s = Settings()
-    assert s.app_env == "production"
-    assert "sentinel" in s.database_url, (
-        "In production, DATABASE_URL should come from env var, not from .env file"
+    s_prod = Settings(_env_file=str(sentinel_env))
+    assert "from_dotenv" not in s_prod.database_url, (
+        f"Production must not load DATABASE_URL from dotenv, got: {s_prod.database_url!r}"
+    )
+
+    # ── Development: dotenv must be loaded ───────────────────────────────────
+    monkeypatch.setenv("APP_ENV", "development")
+    s_dev = Settings(_env_file=str(sentinel_env))
+    assert "from_dotenv" in s_dev.database_url, (
+        f"Development must load DATABASE_URL from dotenv, got: {s_dev.database_url!r}"
+    )
+
+    # ── Explicit env var overrides dotenv in non-production ──────────────────
+    monkeypatch.setenv("DATABASE_URL", "postgresql://explicit:x@localhost/from_env")
+    s_override = Settings(_env_file=str(sentinel_env))
+    assert "from_env" in s_override.database_url, (
+        f"Explicit env var must win over dotenv, got: {s_override.database_url!r}"
     )

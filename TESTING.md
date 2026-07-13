@@ -106,14 +106,23 @@ Tests that verify meeting connector behavior (Zoom join/leave, audio stream, mes
 
 ```
 services/api/tests/
-├── conftest.py       — fixtures: TestClient with mocked database and Redis
-├── test_health.py    — liveness (exact body, independent of deps), readiness (healthy,
-│                        db down, redis down, both down, no sensitive data in response),
-│                        X-Request-ID (generated UUID, accept valid incoming, reject malformed,
-│                        reject oversized, independent across requests)
-└── test_config.py    — Settings validation: defaults, env overrides, CWD independence,
-                         timeout field existence, default DB URL password correctness,
-                         production does not load .env, invalid env raises ValidationError
+├── conftest.py          — fixtures: TestClient with mocked database and Redis
+├── test_health.py       — liveness (exact body, independent of deps), readiness (healthy,
+│                           db down, redis down, both down, no sensitive data in response),
+│                           X-Request-ID (generated UUID, accept valid incoming, reject malformed,
+│                           reject oversized, independent across requests)
+├── test_config.py       — Settings validation: defaults, env overrides, CWD independence,
+│                           timeout field existence, default DB URL password correctness,
+│                           production does not load .env (real temp dotenv proof),
+│                           invalid env raises ValidationError
+└── test_regression.py   — Behavioral regression tests: psycopg2 connect_timeout forwarded,
+                            connection closed on success, returns False on error,
+                            Redis socket_connect_timeout forwarded, socket_timeout forwarded,
+                            Redis close() called on success, close() called on ping failure,
+                            no exception text in response body, generic handler logs exc_type
+                            not exc_message, production JSON processor chain valid,
+                            request context does not leak between requests,
+                            request_id bound to log context
 ```
 
 Run:
@@ -234,6 +243,12 @@ A feature is "done" when:
 1. All specified behavior is implemented
 2. Unit tests cover the new code
 3. Integration tests cover the new API endpoints
-4. `make check` passes (lint + typecheck + test + build)
+4. `make check` passes — the full 54-step quality gate:
+   - **Versions** (steps 1–6): Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, Docker, Docker Compose
+   - **Static analysis** (steps 7–17): ruff format, ruff lint, pyright, pnpm format, pnpm lint, pnpm typecheck, pnpm build, pytest, frontend tests, Docker Compose validate, import check
+   - **Infrastructure** (steps 18–23): Docker Compose up, PostgreSQL healthy, Redis healthy, migration upgrade, migration downgrade, migration re-upgrade
+   - **Runtime** (steps 24–47): Uvicorn start, liveness 200, liveness exact body, readiness 200, both deps healthy, X-Request-ID valid UUID, PostgreSQL degradation (503), database unavailable in response, Redis still ok, PostgreSQL recovery, Redis degradation (503), Redis unavailable in response, database still ok, Redis recovery, both-down (503), both unavailable in response, liveness independent of deps
+   - **Security** (steps 48–50): Gitleaks secret scan, pip-audit (Python CVEs), pnpm audit (npm CVEs)
+   - **Cleanup** (steps 51–54): Stop infrastructure, verify stopped, remove build artifacts, verify removed
 5. PR has been reviewed
 6. KNOWN_LIMITATIONS.md is updated if any limitations exist

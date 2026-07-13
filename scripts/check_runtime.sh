@@ -17,6 +17,8 @@ BASE_URL="http://${API_HOST}:${API_PORT}/api/v1/health"
 LIVENESS_TIMEOUT="${LIVENESS_TIMEOUT:-15}"
 INFRA_TIMEOUT="${INFRA_TIMEOUT:-60}"
 UVICORN_PID_FILE="/tmp/expertseat-uvicorn.pid"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-10}"
 
 # Load .env for DATABASE_URL / REDIS_URL if not set in environment
 if [ -z "${DATABASE_URL:-}" ] && [ -f "${REPO_ROOT}/.env" ]; then
@@ -41,11 +43,12 @@ trap cleanup_uvicorn EXIT
 # ─── Helper functions ─────────────────────────────────────────────────────────
 
 http_status() {
-  curl -s -o /dev/null -w "%{http_code}" "${1}"
+  curl -s --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+    -o /dev/null -w "%{http_code}" "${1}"
 }
 
 http_body() {
-  curl -s "${1}"
+  curl -s --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" "${1}"
 }
 
 assert_status() {
@@ -121,7 +124,8 @@ echo "  Uvicorn started (PID ${UVICORN_PID})"
 echo "  Waiting for liveness (timeout: ${LIVENESS_TIMEOUT}s)..."
 DEADLINE=$(( $(date +%s) + LIVENESS_TIMEOUT ))
 while true; do
-  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/live" 2>/dev/null || echo "000")
+  STATUS=$(curl -s --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+    -o /dev/null -w "%{http_code}" "${BASE_URL}/live" 2>/dev/null || echo "000")
   [ "${STATUS}" = "200" ] && break
   [ "$(date +%s)" -lt "${DEADLINE}" ] \
     || { echo "ERROR: Uvicorn did not start within ${LIVENESS_TIMEOUT}s"; cat /tmp/expertseat-uvicorn.log; exit 1; }
@@ -152,7 +156,8 @@ assert_json_field "${READY_BODY}" "['checks']['database']" "ok" "readiness.datab
 assert_json_field "${READY_BODY}" "['checks']['redis']" "ok" "readiness.redis"
 
 echo "  [29] X-Request-ID present and valid UUID"
-REQUEST_ID=$(curl -s -I "${BASE_URL}/live" \
+REQUEST_ID=$(curl -s --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+  -I "${BASE_URL}/live" \
   | grep -i "^x-request-id:" | tr -d '[:space:]\r' | sed 's/^x-request-id://i')
 echo "  X-Request-ID: ${REQUEST_ID}"
 [ -n "${REQUEST_ID}" ] || { echo "ERROR: X-Request-ID header missing"; exit 1; }

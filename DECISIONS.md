@@ -517,3 +517,30 @@ All updated actions use Node.js 24 for their internal runtime. All inputs used i
 - Stay on current versions: CI will break in September 2026.
 
 **Consequences**: All action SHAs must be updated as a coordinated change. SHA pins remain immutable — each new version gets a new SHA. New self-hosted runners must be version >= 2.327.1 to support Node.js 24 action runtime.
+
+---
+
+## ADR-026: Blueprint publication lifecycle
+
+**Date**: 2026-07-13
+**Status**: Accepted
+
+**Context**: The initial spec was ambiguous about when a Blueprint version becomes immutable. One interpretation ("activated" = first interview use) allowed editing until use. Another interpretation required explicit publication.
+
+**Decision**: A Blueprint version becomes immutable at publication, not at first interview use. The lifecycle is: Draft → Under recruiter review → Validated → Published → Superseded → Archived.
+
+**Rules**:
+- Draft versions may be edited in place.
+- A recruiter or admin explicitly publishes a version. This action is irreversible and creates an immutable BlueprintVersion record.
+- A published version may never be modified. Any change requires creating a new Draft.
+- Interviews are assigned to exactly one published Blueprint version at scheduling time. Subsequent Blueprint changes do not affect that interview.
+- Supersession occurs when a newer version is published; the prior published version is marked Superseded but remains readable and linked from interviews that used it.
+- The `activated_at` field (meaning "first used in an interview") is removed; it was a misleading immutability boundary.
+
+**Reason**: Immutability at publication is unambiguous and prevents accidental edits to a version that has been reviewed and approved but not yet used. "Activated" was confusing and allowed a window where a reviewed version could be mutated.
+
+**Alternatives considered**:
+- Immutable after first use: rejected because it allows edits to reviewed-but-unused versions.
+- No immutability: rejected because report reproducibility requires the Blueprint used for an interview to be permanently readable.
+
+**Consequences**: The `lifecycle_status` field drives all version state. The UI must clearly show which versions are published vs. draft. Migration to add `lifecycle_status` and remove `activated_at` is a Milestone 2 schema task.

@@ -19,12 +19,20 @@ setup:
 dev-infra:
 	$(COMPOSE) up -d
 
-# Wait until both services are healthy before proceeding
+# Wait until both services are healthy before proceeding (60-second timeout)
 dev-infra-wait: dev-infra
-	@echo "Waiting for PostgreSQL..."
-	@until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q postgres) 2>/dev/null | grep -q healthy; do sleep 1; done
-	@echo "Waiting for Redis..."
-	@until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q redis) 2>/dev/null | grep -q healthy; do sleep 1; done
+	@echo "Waiting for PostgreSQL (timeout: 60s)..."
+	@DEADLINE=$$(( $$(date +%s) + 60 )); \
+	 until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q postgres) 2>/dev/null | grep -q healthy; do \
+	   [ $$(date +%s) -lt $${DEADLINE} ] || { echo "ERROR: PostgreSQL did not become healthy within 60s"; exit 1; }; \
+	   sleep 1; \
+	 done
+	@echo "Waiting for Redis (timeout: 60s)..."
+	@DEADLINE=$$(( $$(date +%s) + 60 )); \
+	 until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q redis) 2>/dev/null | grep -q healthy; do \
+	   [ $$(date +%s) -lt $${DEADLINE} ] || { echo "ERROR: Redis did not become healthy within 60s"; exit 1; }; \
+	   sleep 1; \
+	 done
 	@echo "Infrastructure ready."
 
 # Stop infrastructure services

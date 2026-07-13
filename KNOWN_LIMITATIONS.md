@@ -47,10 +47,10 @@ As of Milestone 0, ExpertSeat is a repository foundation. The following are impl
 
 ## Process Limitations (Milestone 0)
 
-- **Branch protection on `main`**: Not configured — GitHub plan limitations prevent some rule types; documented in SECURITY.md.
-- **Dependency Review (GitHub Advanced Security)**: GHAS is not available at the current plan tier. Dependency Review workflow was removed and replaced with Gitleaks secret scanning. Dependabot provides dependency vulnerability alerts.
-- **Original PR #7 is non-reviewable**: All foundation commits went directly to `main`; PR #7 shows only a single file. The audit remediation branch `fix/m0-audit-remediation` is the correct review target.
+- **Original PR #7 is non-reviewable**: All foundation commits went directly to `main`; PR #7 shows only a single file. The audit remediation branch `fix/m0-audit-remediation` (PR #12) is the correct review target.
 - **Repository is public**: Changed from private (original spec) to public on 2026-07-13 per owner decision.
+- **Dependency Review (GitHub Advanced Security)**: GHAS is not available at the current plan tier. The `dependency-review.yml` workflow was removed. Proactive dependency scanning is provided by `pip-audit` (Python) and `pnpm audit --audit-level high` (npm), both run in CI. Dependabot provides reactive PR-based alerts.
+- **AI panel currently text-only**: No audio/TTS integration exists yet. The live Zoom meeting integration with AI-generated speech is planned for Milestones 6–8. The text-only simulator (Milestone 4) is the first functional interview experience.
 
 ---
 
@@ -70,4 +70,5 @@ Even when ExpertSeat is fully implemented:
 - **ExpertSeat does not guarantee fairness.** AI systems reflect the data they were trained on and the rubrics they are given. We cannot claim to eliminate bias.
 - **ExpertSeat does not operate on undisclosed AI participation.** Consent is required. If a candidate refuses, the interview cannot use ExpertSeat.
 - **ExpertSeat's AI agents are bounded by provided evidence.** They do not have general internet access during interviews.
-- **ExpertSeat cannot evaluate all types of roles.** Roles requiring physical demonstration, creative portfolio review, or highly context-dependent judgment may not be well-served by text-based AI panels.
+- **ExpertSeat cannot evaluate all types of roles.** Roles requiring physical demonstration, creative portfolio review, or highly context-dependent judgment may not be well-served by AI panels.
+- **ExpertSeat's data retention policy is not yet defined.** Retention periods for interview recordings, transcripts, and reports require legal and privacy review before defaults are established. No retention defaults are specified in Milestone 0.

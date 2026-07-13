@@ -115,14 +115,19 @@ All endpoints are under `/api/v1/`.
 | Router | Endpoints | Milestone |
 |---|---|---|
 | `/health` | `GET /live`, `GET /ready` | 0 (done) |
-| `/auth` | `POST /login`, `POST /logout`, `POST /refresh` | 1 |
-| `/orgs` | CRUD for organizations | 1 |
-| `/users` | CRUD for users within org | 1 |
-| `/blueprints` | CRUD + versioning | 2 |
-| `/candidates` | CRUD, consent management | 2 |
-| `/interviews` | Schedule, start, end | 3 |
-| `/interviews/{id}/agent` | Agent interaction endpoints | 3 |
-| `/reports` | Report retrieval, review | 3 |
+| `/auth` | login, logout, refresh | 1 |
+| `/organizations` | CRUD for organizations | 1 |
+| `/users` | CRUD for users, membership management | 1 |
+| `/memberships` | org member invite/remove | 1 |
+| `/blueprints` | CRUD + versioning + source documents + validation | 2 |
+| `/candidates` | CRUD, consent management, Zoom-link input | 3 |
+| `/interviews` | Schedule, state transitions, consent gate | 3 |
+| `/interviews/{id}/session` | Browser agent session, interview events, transcript turns, recruiter commands | 4 |
+| `/reports` | Report retrieval, observations, evidence items, human review, overrides | 5 |
+| `/meetings/feasibility` | MeetingConnector contract + spike artifacts | 6 |
+| `/meetings/{id}/session` | Zoom connector + MeetingSession runtime | 7 |
+| `/meetings/{id}/control` | Live control-room real-time endpoints | 8 |
+| `/comparisons` | Candidate comparison across same Blueprint | 9 |
 
 ---
 
@@ -171,7 +176,7 @@ The Role Agent joins as a disclosed, named participant and uses TTS to participa
 
 ---
 
-### Evidence Pipeline (Planned, Milestone 2–3)
+### Evidence Pipeline (Planned, Milestone 2 and 4)
 
 ```mermaid
 sequenceDiagram

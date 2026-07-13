@@ -323,6 +323,32 @@ Round 2:
 11. `ci: update action SHAs, add vulnerability scanning and runtime smoke-test jobs`
 12. `docs: correct stale content across all documentation files`
 
+---
+
+## 8. Branch Protection Evidence (2026-07-13)
+
+Branch protection on `main` is configured. The following was verified via the GitHub API:
+
+```
+GET /repos/YashPatel2395/expertseat/branches/main/protection
+```
+
+**Required status checks** (strict: upstream must be up-to-date before merging):
+- Secret scan (Gitleaks)
+- Validate Docker Compose configuration
+- Frontend (format, lint, typecheck, test, build)
+- Backend (format, lint, typecheck, test)
+- Database migrations (upgrade → downgrade → upgrade)
+- Dependency vulnerability audit
+- API runtime smoke test
+
+**Other protections**:
+- `enforce_admins`: `true` — restrictions apply to admins and owners
+- `allow_force_pushes`: `false` — force push to `main` is blocked
+- `allow_deletions`: `false` — `main` cannot be deleted
+
+---
+
 ### Evidence required for acceptance
 
 Round 1 + Round 2:

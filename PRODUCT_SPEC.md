@@ -78,17 +78,15 @@ Role Agents may not introduce factual claims that cannot be traced to one of the
 
 ## 4. User Roles
 
-ExpertSeat has three actor types in the MVP:
+ExpertSeat has three org user roles in the MVP:
 
 | Role | Description | Can Do |
 |---|---|---|
-| **Recruiter** | Primary platform user within an org | Create blueprints, schedule interviews, run control room, review reports |
-| **Hiring Manager** | Optional reviewer within the same org | View reports, accept/reject/flag observations, cannot modify blueprints |
-| **Candidate** | External interview participant | Receive disclosure, complete consent, participate in interview |
+| **Admin** | Workspace administrator | Manage workspace, manage org members, create/edit Blueprints, schedule interviews, operate recruiter controls, review reports |
+| **Recruiter** | Primary interviewing user within an org | Create/edit Blueprints, create candidates, schedule interviews, operate interview controls, review reports |
+| **Reviewer** | Report reviewer within an org | View assigned reports, review evidence, accept/reject/override observations with a reason. Cannot manage org members. Cannot modify published Blueprint versions. |
 
-In the MVP, candidates do not have platform accounts. They interact via a consent link only.
-
-All recruiters within an org have equal permissions in the MVP. Role-based access control within orgs is a post-pilot feature.
+Candidate is an external participant, not an org user role. In the MVP, candidates interact only via a consent link. They do not have platform accounts.
 
 ---
 
@@ -103,7 +101,7 @@ An interview moves through the following lifecycle phases:
 5. **Interview Active** — Interview begins. Role Agent joins (browser simulator M4 or Zoom M7). Recruiter activates the agent from the control room.
 6. **Interview In Progress** — Agent asks questions, captures responses, generates observations. Recruiter monitors and can intervene at any time.
 7. **Interview Completed** — Interview concludes. Agent produces draft report.
-8. **Report Under Review** — Recruiter and/or hiring manager review observations. Each observation is accepted, modified, or rejected.
+8. **Report Under Review** — Recruiter and/or Reviewer review observations. Each observation is accepted, modified, or rejected.
 9. **Report Finalized** — All observations reviewed. Report is available for comparison and export. Hiring decision is made by a human outside the platform.
 10. **Archived** — Interview and report retained per org retention policy, then deleted.
 
@@ -123,7 +121,7 @@ ExpertSeat requires explicit candidate consent before any AI agent participates 
    - What the agent will not do: make hiring decisions, access data outside the interview
    - A clear mechanism to decline without penalty
 2. **Capture consent** — candidate must click an explicit consent button (not implied by joining the meeting)
-3. **Record consent** — the system stores: candidate identifier, timestamp (UTC), disclosure version shown, IP address (for audit purposes)
+3. **Record consent** — the system stores: candidate identifier, timestamp (UTC), disclosure version shown. (IP address collection requires a documented necessity and approved retention policy before enabling.)
 4. **Gate the interview** — the interview session cannot be created and the agent cannot be activated without a confirmed consent record
 5. **Handle withdrawal** — if a candidate withdraws consent mid-interview, the agent is immediately deactivated and the recruiter is notified
 
@@ -178,24 +176,46 @@ If an agent generates an observation without any evidence citation, the system r
 
 ## 9. Recruiter Commands
 
-The recruiter has exactly 12 control actions available from the Recruiter Control Room during an active interview:
+Recruiter commands are split into two groups: live interview control room commands and report review actions. These are separate interfaces for separate phases of the interview lifecycle.
 
-| # | Command | Description |
-|---|---|---|
-| 1 | **Activate agent** | Brings the agent from standby into the live interview; agent begins with its opening greeting |
-| 2 | **Deactivate agent** | Immediately silences and removes the agent from active participation; interview may continue with human panelists |
-| 3 | **Mute agent** | Prevents the agent from speaking; agent continues listening and generating internal observations |
-| 4 | **Unmute agent** | Re-enables agent speech output after a mute |
-| 5 | **Take over** | Temporarily suspends the agent's question flow; recruiter takes the floor; agent resumes on command |
-| 6 | **Ask agent to repeat** | Agent repeats its most recent question or statement verbatim |
-| 7 | **Skip question** | Advances the agent past the current question to the next in sequence; skipped question is marked as not asked in the report |
-| 8 | **Flag observation** | Marks a draft observation for mandatory human review; flagged observations cannot be auto-accepted |
-| 9 | **Approve observation** | Accepts a draft observation into the final report as written |
-| 10 | **Reject observation** | Removes a draft observation from the final report; rejection is logged with the reviewer ID |
-| 11 | **Request summary** | Agent produces a mid-interview summary of observations generated so far (does not end the interview) |
-| 12 | **End interview** | Formally ends the interview session; agent completes any open observations and submits the draft report |
+### 9.1 Live Interview Control Room Commands
 
-Commands 1–7 are available during an active interview session. Commands 8–10 are available in the report review phase. Commands 11–12 are available during the active interview.
+Available during an active interview session:
+
+| # | Command |
+|---|---|
+| 1 | Join meeting |
+| 2 | Retry joining |
+| 3 | Cancel interview |
+| 4 | Remove agent |
+| 5 | Start technical section |
+| 6 | Ask next question |
+| 7 | Ask suggested follow-up |
+| 8 | Go deeper |
+| 9 | Challenge the answer |
+| 10 | Simplify the question |
+| 11 | Change topic |
+| 12 | Skip question |
+| 13 | Mute AI |
+| 14 | Unmute AI |
+| 15 | Recruiter takeover |
+| 16 | Resume AI section |
+| 17 | End technical section |
+| 18 | Leave meeting |
+
+### 9.2 Report Review Actions
+
+Separate from the live command bar. Available in the report review phase after the interview ends:
+
+| # | Action |
+|---|---|
+| 1 | Accept observation |
+| 2 | Reject observation |
+| 3 | Override score with reason |
+| 4 | Add reviewer note |
+| 5 | Flag for expert review |
+| 6 | Request another interview |
+| 7 | Finalize report |
 
 ---
 
@@ -210,24 +230,31 @@ A Blueprint has the following fields. All fields are stored on the `blueprints` 
 | 1 | `id` | UUID | Immutable blueprint identifier |
 | 2 | `org_id` | UUID | Owning organization (immutable) |
 | 3 | `name` | string (255) | Human-readable blueprint name |
-| 4 | `version_number` | integer | Auto-incrementing version; versions are immutable once activated |
+| 4 | `version_number` | integer | Auto-incrementing version number |
 | 5 | `version_label` | string (100) | Optional human label (e.g., "v1.2 — updated rubrics") |
-| 6 | `created_at` | timestamp (UTC) | When this version was created |
-| 7 | `created_by` | UUID (user) | Recruiter who created/activated this version |
-| 8 | `activated_at` | timestamp (UTC) | When this version was first used in a live interview; null if never used |
-| 9 | `is_active` | boolean | Whether this is the current active version for new interviews |
-| 10 | `verified_status` | enum: `custom`, `verified` | Whether this blueprint has passed ExpertSeat's verification process |
-| 11 | `verified_at` | timestamp (UTC) | When verified status was granted; null for custom |
+| 6 | `lifecycle_status` | enum: `draft`, `under_review`, `validated`, `published`, `superseded`, `archived` | Current lifecycle state of this version |
+| 7 | `draft_created_at` | timestamp (UTC) | When this draft version was created |
+| 8 | `created_by` | UUID (user) | User who created this version |
+| 9 | `published_at` | timestamp (UTC) or null | When this version was published; null if not yet published |
+| 10 | `published_by` | UUID (user) or null | User who published this version; null if not yet published |
+| 11 | `superseded_at` | timestamp (UTC) or null | When this version was superseded; null if not superseded |
+| 12 | `superseded_by_version_id` | UUID or null | The version that superseded this one; null if not superseded |
+| 13 | `verified_status` | enum: `custom`, `verified` | Whether this blueprint has passed ExpertSeat's verification process |
+| 14 | `verified_at` | timestamp (UTC) | When verified status was granted; null for custom |
 
 ### 10.2 Role Context
 
 | # | Field | Type | Description |
 |---|---|---|---|
-| 12 | `domain` | string (255) | Professional domain (e.g., "Backend Engineering", "Security Engineering") |
-| 13 | `role_title` | string (255) | Specific role (e.g., "Staff Backend Engineer") |
-| 14 | `role_level` | enum: `junior`, `mid`, `senior`, `staff`, `principal`, `lead`, `manager` | Seniority level |
-| 15 | `role_context_narrative` | text | Free-text description of role responsibilities, team context, and what the interview should assess |
-| 16 | `interview_language` | string (5) | BCP-47 language tag (e.g., "en-US"); determines STT/TTS language |
+| 15 | `domain` | string (255) | Professional domain (e.g., "Backend Engineering", "Nursing", "Financial Advisory") |
+| 16 | `role_title` | string (255) | Specific role (e.g., "Staff Backend Engineer", "Consultant Level 2") |
+| 17 | `seniority_label` | string | Recruiter-facing label for the seniority of this role (any text, e.g. "Consultant Level 2", "Senior Staff Engineer") |
+| 18 | `seniority_band` | optional enum: `entry`, `mid`, `senior`, `expert`, `executive` | Generic broad band for cross-domain comparison; not profession-specific |
+| 19 | `minimum_experience` | integer | Minimum years of relevant experience required |
+| 20 | `preferred_experience` | integer | Preferred years of relevant experience |
+| 21 | `profession_specific_level` | optional string | Profession-specific designation where applicable (e.g., "P4", "Band 6 NHS", "Grade 7") |
+| 22 | `role_context_narrative` | text | Free-text description of role responsibilities, team context, and what the interview should assess |
+| 23 | `interview_language` | string (5) | BCP-47 language tag (e.g., "en-US"); determines STT/TTS language |
 
 ### 10.3 Evaluation Dimensions
 
@@ -298,7 +325,7 @@ Every scored observation produced by a Role Agent has exactly the following 11 f
 | 7 | `insufficient_evidence_flag` | boolean | True if the agent could not gather enough evidence to produce a score; when true, `score` is null |
 | 8 | `agent_confidence` | float (0.0–1.0) | Agent's self-reported confidence in the observation; informational only, does not affect score |
 | 9 | `human_review_status` | enum: `pending`, `approved`, `rejected`, `flagged` | Current review state; starts as `pending` |
-| 10 | `reviewer_id` | UUID or null | User ID of the recruiter or hiring manager who last reviewed this observation |
+| 10 | `reviewer_id` | UUID or null | User ID of the Recruiter or Reviewer who last reviewed this observation |
 | 11 | `reviewed_at` | timestamp (UTC) or null | When the observation was last reviewed; null until first review action |
 
 **System rule**: An observation with `score` set and `evidence_citations` empty is invalid and will be rejected by the output validator. This enforces **"No evidence, no score"** at the API layer.
@@ -309,15 +336,18 @@ Every scored observation produced by a Role Agent has exactly the following 11 f
 
 ## 12. Blueprint Versioning
 
-Blueprint versioning is resolved as follows:
+Blueprint versions move through a defined lifecycle. States: **Draft → Under recruiter review → Validated → Published → Superseded → Archived**
 
-- Every Blueprint has a `version_number` (integer, starting at 1).
-- When a recruiter saves changes to a Blueprint, a new version is created. The previous version is not modified.
-- A version is **immutable** once it has been `activated` (i.e., used in at least one interview session). Any further changes create a new version.
-- Versions that have never been activated can be edited in place (they exist as drafts).
-- When an interview is scheduled, it is pinned to the current active Blueprint version at the time of scheduling. Subsequent Blueprint edits do not affect that interview.
-- The `version_number` used for each interview is recorded in the interview record and in the generated report.
-- The UI warns recruiters before activating a new Blueprint version if there are upcoming interviews using the previous version, so they can decide whether to re-pin.
+Rules:
+- Draft versions may be edited in place.
+- A recruiter or Admin explicitly publishes a version. Publication (not first interview use) creates an immutable BlueprintVersion record. This action is irreversible.
+- A published version may never be edited in place. Any change to a published version requires creating a new Draft.
+- Interviews are assigned to exactly one published Blueprint version at scheduling time. Subsequent Blueprint changes do not affect that interview.
+- When a newer version is published, the prior published version is marked Superseded. It remains readable and is permanently linked from any interviews that used it.
+- Publication, supersession, and interview assignment are all audited events.
+- A published version does not need to be used in an interview before becoming immutable. Immutability is triggered by publication, not by first use.
+
+The `lifecycle_status` field drives all version state. The `activated_at` field (meaning "first used in an interview") is removed — it was a misleading immutability boundary. See ADR-026.
 
 This is the resolved policy. There are no open questions about Blueprint versioning.
 
@@ -325,51 +355,104 @@ This is the resolved policy. There are no open questions about Blueprint version
 
 ## 13. Interview State Machine
 
-The interview passes through the following states. All transitions are server-side events.
+The interview passes through the following states. All transitions are server-side events and are persisted before taking effect — state is never lost on reconnection.
+
+### 13.1 Full State List
 
 ```
-CREATED
+Scheduled
   |
   v
-CONSENT_PENDING          (consent email sent to candidate)
+Awaiting consent          (consent email sent to candidate)
   |
   v (candidate completes consent)
-CONSENT_COMPLETED
+Consent completed
   |
-  v (recruiter activates interview)
-AGENT_STANDBY            (agent is in the meeting, waiting for recruiter activation)
+  v (recruiter confirms readiness)
+Ready
   |
-  v (recruiter clicks "Activate agent")
-INTERVIEW_ACTIVE         (agent is asking questions, generating observations)
+  v (recruiter initiates join)
+Waiting to join
   |
-  +----> AGENT_MUTED     (recruiter muted agent; agent still listening)
+  v (bot enters platform waiting room)
+In waiting room
+  |
+  v (bot admitted to meeting)
+Connected
+  |
+  v (agent joins but remains silent)
+AI joined and muted
+  |
+  v (recruiter makes opening remarks)
+Recruiter introduction
+  |
+  v (recruiter activates AI section)
+Assessment active
+  |
+  +----> Listening              (agent waiting for candidate to speak)
+  |
+  +----> Candidate speaking     (candidate response in progress)
+  |
+  +----> Candidate answer ending (trailing silence detected; about to process)
+  |
+  +----> Processing answer      (STT + evidence grounding in progress)
+  |
+  +----> Follow-up ready        (agent has generated a follow-up; awaiting turn)
+  |
+  +----> Awaiting recruiter action  (agent waiting for recruiter command)
+  |
+  +----> AI speaking            (agent delivering question or follow-up)
+  |
+  +----> Recruiter speaking     (recruiter has the floor during AI section)
+  |
+  +----> Assessment paused      (recruiter paused the AI section; not a full takeover)
+  |
+  +----> Recruiter takeover     (recruiter has deactivated agent; full manual control)
   |         |
-  |         v (recruiter unmutes)
-  |      INTERVIEW_ACTIVE
+  |         v (recruiter resumes AI section)
+  |      Assessment active
   |
-  +----> RECRUITER_TAKEOVER  (recruiter has the floor; agent paused)
-  |         |
-  |         v (recruiter returns control)
-  |      INTERVIEW_ACTIVE
+  v (recruiter ends technical section)
+Technical section complete
   |
-  v (recruiter clicks "End interview" or time limit reached)
-COMPLETING               (agent finalizing open observations, generating draft report)
+  v (recruiter ends meeting or time limit reached)
+Meeting ended
+  |
+  +----> [if connection lost before end]
+  |      Meeting disconnected
+  |        |
+  |        v (reconnect attempt)
+  |      Reconnecting
+  |        |
+  |        +----> Connected         (success — state restored from server)
+  |        |
+  |        +----> Reconnection failed  (unrecoverable; recruiter notified)
   |
   v
-REPORT_DRAFT             (draft report available; all observations in pending review status)
+Processing report         (agent finalizing open observations, generating draft report)
   |
-  v (all observations reviewed)
-REPORT_FINALIZED         (report locked; no further changes without explicit unlock)
+  v
+Human review              (draft report available; all observations in pending review status)
+  |
+  v (all observations reviewed and finalized)
+Finalized                 (report locked; no further changes without explicit unlock)
   |
   v (retention policy expiry)
-ARCHIVED
+Archived
 ```
 
-**Invalid transitions**: An interview cannot move from CONSENT_PENDING to AGENT_STANDBY — consent must complete first. An interview cannot move to REPORT_FINALIZED if any observation has `human_review_status = pending`. These constraints are enforced at the API layer.
+### 13.2 Invalid Transitions (Prevented by System)
 
-**Failure states**:
-- `AGENT_DISCONNECTED` — agent lost its Zoom connection; recruiter is notified; reconnect attempted automatically
-- `AGENT_ERROR` — unrecoverable agent error; recruiter must take over; partial observations are saved
+The following transitions are explicitly prevented and enforced at the API layer:
+
+- **AI speaking before activation**: The agent may not produce speech output before the recruiter has activated the AI section. `AI joined and muted` is the entry state; no speech is possible before `Assessment active`.
+- **AI speaking over participants (interrupting)**: The agent may not begin speaking while `Candidate speaking` or `Recruiter speaking` is active. Transitions to `AI speaking` are only valid from `Follow-up ready` or `Awaiting recruiter action`.
+- **Duplicate questions to the same candidate in the same interview**: The system tracks which questions have been asked in this interview session and prevents re-asking.
+- **Endless follow-up loops**: Enforced by `follow_up_limit` per question in the Blueprint. The agent may not exceed the configured limit.
+- **Continuing assessment after recruiter takeover**: Once `Recruiter takeover` is active, the agent does not resume autonomously. The recruiter must explicitly issue the "Resume AI section" command.
+- **State loss after reconnection**: Server-side state is authoritative. On reconnect, the client receives the current server state. The agent does not re-start from an earlier position.
+- **Scoring before adequate evidence**: An observation with no evidence citations is rejected by the output validator before it can be written to the database.
+- **Finalization with unreviewed observations**: An interview cannot move to `Finalized` if any observation has `human_review_status = pending`. This is enforced at the API layer.
 
 ---
 
@@ -396,8 +479,8 @@ The Recruiter Control Room is the live interface available to the recruiter duri
 - Confidence indicator per transcript segment
 
 **Command Bar**
-- All 12 recruiter commands (see Section 9) available as buttons
-- Command confirmation dialog for destructive commands (Deactivate, End interview)
+- All live interview control room commands (see Section 9.1) available as buttons
+- Command confirmation dialog for destructive commands (Remove agent, End technical section)
 - Command history log
 
 ### 14.2 Control Room Guarantees
@@ -497,7 +580,7 @@ These are things ExpertSeat explicitly does not try to do:
 | M5 | Reporting | Report finalization, audit log, modification log, export, recording consent workflow, data retention policies |
 | M6 | Zoom Feasibility Spike | Prove two-way audio, waiting-room handling, bot identity, STT/TTS latency in a real Zoom meeting |
 | M7 | Zoom Integration | Full Zoom connector: agent joins as named participant, STT/TTS, mute/unmute, reconnect, failure reporting |
-| M8 | Control Room | Full recruiter control room UI for live Zoom interviews; all 12 commands wired to live meeting |
+| M8 | Control Room | Live control room for Zoom interviews; all live interview commands wired to meeting |
 | M9 | Comparison | Multi-candidate report comparison against same Blueprint rubric |
 | M10 | Security Hardening | Security audit, PII scrubbing, bias audit capability, CVE scanning, EU AI Act conformity assessment documentation |
 | M11 | Pilot Readiness | Ops runbooks, monitoring, HA configuration, pilot customer onboarding |
@@ -513,7 +596,7 @@ The simulator includes:
 - Role Agent question generation from blueprint + evidence
 - Evidence citation tracking — every agent output linked to a source
 - "No evidence, no score" enforcement — validated at the output parser
-- All 12 recruiter commands available in the simulator control room
+- All live interview control room commands (see Section 9.1) available in the simulator control room
 - Post-interview structured report generation
 - Human review workflow with observation approve/flag/reject
 
@@ -612,15 +695,7 @@ Integration tests assert org boundary isolation for every resource type: bluepri
 
 ## 25. Data Retention
 
-Retention is configurable per organization with the following defaults and constraints:
-
-| Data Type | Default Retention | Minimum | Maximum |
-|---|---|---|---|
-| Interview records | 12 months | 30 days | 7 years |
-| Candidate PII | 12 months | 30 days | 7 years |
-| Transcripts | 12 months | 30 days | 7 years |
-| Audit logs | 36 months | 12 months | Indefinite |
-| Consent records | 36 months | 12 months | Indefinite |
+Retention duration is configurable per organization. No default retention period is committed at Milestone 0. Minimum and maximum durations require privacy and legal review before any candidate data is accepted. Recording retention is separate from transcript retention. Audio/video recording is disabled by default. Candidate deletion requests must be supported. Consent and audit record retention require legal review.
 
 On expiry, candidate PII is hard-deleted (not soft-deleted). Non-PII interview metadata (timing, blueprint version used, dimension IDs) may be retained in anonymized form for platform analytics only if the org opts in.
 
@@ -699,7 +774,7 @@ We collect only what is needed for the interview record. We do not sell candidat
 3. **Candidate Consent**: Candidate receives a pre-interview disclosure explaining that an AI panelist will participate. Consent is required to proceed. Interview is blocked until consent is confirmed.
 4. **Live Interview**: The Role Agent joins as a disclosed panelist. Human panelists may also be present. The agent asks questions, probes responses within follow-up limits, and generates evidence-backed observations. The recruiter monitors and controls the agent at all times.
 5. **Report Generation**: After the interview, the Role Agent produces a structured draft report: questions asked, candidate responses (transcript), scored observations per evaluation dimension, and evidence citations for every score. Dimensions with insufficient evidence are flagged as "Insufficient evidence", never scored zero.
-6. **Human Review**: A human recruiter or hiring manager reviews the draft report. They may approve, flag, or reject any observation. No observation is final until reviewed. The final hiring decision is always made by a human outside the ExpertSeat platform.
+6. **Human Review**: A Recruiter or Reviewer reviews the draft report. They may approve, flag, or reject any observation. No observation is final until reviewed. The final hiring decision is always made by a human outside the ExpertSeat platform.
 7. **Report Finalization**: All observations reviewed. Report is locked. Available for export and candidate comparison.
 8. **Comparison** (optional, M9): Compare multiple candidate reports against the same Blueprint rubric.
 
