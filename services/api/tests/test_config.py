@@ -98,21 +98,21 @@ def test_production_does_not_load_dotenv(tmp_path, monkeypatch):
 
     # ── Production: dotenv must be silently skipped ──────────────────────────
     monkeypatch.setenv("APP_ENV", "production")
-    s_prod = Settings(_env_file=str(sentinel_env))
+    s_prod = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s_prod.database_url, (
         f"Production must not load DATABASE_URL from dotenv, got: {s_prod.database_url!r}"
     )
 
     # ── Development: dotenv must be loaded ───────────────────────────────────
     monkeypatch.setenv("APP_ENV", "development")
-    s_dev = Settings(_env_file=str(sentinel_env))
+    s_dev = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" in s_dev.database_url, (
         f"Development must load DATABASE_URL from dotenv, got: {s_dev.database_url!r}"
     )
 
     # ── Explicit env var overrides dotenv in non-production ──────────────────
     monkeypatch.setenv("DATABASE_URL", "postgresql://explicit:x@localhost/from_env")
-    s_override = Settings(_env_file=str(sentinel_env))
+    s_override = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_env" in s_override.database_url, (
         f"Explicit env var must win over dotenv, got: {s_override.database_url!r}"
     )
