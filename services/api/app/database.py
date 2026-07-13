@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine, text
+import psycopg2
+from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
@@ -20,9 +21,17 @@ def get_db():
 
 
 def check_database_connection() -> bool:
+    """Open a short-lived connection with a bounded timeout for the readiness check.
+
+    Uses psycopg2 directly so connect_timeout is honoured without relying on
+    OS-level TCP timeouts (which may be 30 s or more).
+    """
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        conn = psycopg2.connect(
+            settings.database_url,
+            connect_timeout=settings.db_connect_timeout,
+        )
+        conn.close()
         return True
     except Exception:
         return False

@@ -35,7 +35,11 @@ def readiness():
 
     _redis_client = None
     try:
-        _redis_client = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
+        _redis_client = redis_lib.from_url(
+            settings.redis_url,
+            socket_connect_timeout=settings.redis_connect_timeout,
+            socket_timeout=settings.redis_socket_timeout,
+        )
         _redis_client.ping()
         checks["redis"] = "ok"
     except Exception:
