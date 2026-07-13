@@ -15,8 +15,9 @@ only if it was installed by this migration.
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "0002"
 down_revision = "0001"
@@ -206,9 +207,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("token_hash", name="uq_password_reset_tokens_token_hash"),
     )
-    op.create_index(
-        "ix_password_reset_tokens_user_id", "password_reset_tokens", ["user_id"]
-    )
+    op.create_index("ix_password_reset_tokens_user_id", "password_reset_tokens", ["user_id"])
 
     # ── organization_invitations ───────────────────────────────────────────────
     op.create_table(
@@ -240,9 +239,7 @@ def upgrade() -> None:
             "role IN ('admin', 'recruiter', 'reviewer')", name="ck_invitations_role"
         ),
     )
-    op.create_index(
-        "ix_organization_invitations_org_id", "organization_invitations", ["org_id"]
-    )
+    op.create_index("ix_organization_invitations_org_id", "organization_invitations", ["org_id"])
 
     # ── audit_events ───────────────────────────────────────────────────────────
     op.create_table(
