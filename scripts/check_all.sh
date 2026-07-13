@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# check_all.sh — Complete 54-step quality gate for ExpertSeat.
+# check_all.sh — Full quality gate for ExpertSeat.
 #
-# Runs all validation phases in order:
-#   1. Version checks and dependency installation
-#   2. Static analysis (format, lint, typecheck, tests, build)
-#   3. Infrastructure startup and database migration cycle
-#   4. API runtime verification (liveness, readiness, degradation, recovery)
-#   5. Security scans (secrets, CVEs)
-#   6. Cleanup
+# Runs all validation phases in order by calling shared leaf scripts.
+# CI jobs call the same leaf scripts, so local and CI use identical validation logic.
+#
+#   Phase 1 — check_versions.sh         version checks + dependency installation
+#   Phase 2 — check_static.sh           orchestrates:
+#               check_compose.sh        Docker Compose configuration validation
+#               check_backend.sh        ruff, pyright, pytest, import check
+#               check_frontend.sh       prettier, eslint, tsc, vitest, next build
+#   Phase 3 — check_infrastructure.sh   Docker Compose up, migration cycle
+#   Phase 4 — check_runtime.sh          HTTP liveness/readiness, degradation, recovery
+#   Phase 5 — check_security.sh         orchestrates:
+#               check_secrets.sh        Gitleaks 8.30.1 full history scan
+#               check_dependencies.sh   pip-audit + pnpm audit
+#   Phase 6 — cleanup
 #
 # Must be run from the repository root or from scripts/.
-# Requires: Docker, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks.
+# Requires: Docker, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks 8.30.1.
 #
 # Usage:
 #   scripts/check_all.sh         (or: make check)
@@ -63,28 +70,28 @@ cleanup_all() {
 trap cleanup_all EXIT
 
 echo "================================================================"
-echo " ExpertSeat — complete quality gate (54 steps)"
+echo " ExpertSeat — quality gate"
 echo "================================================================"
 echo ""
 
-# Phase 1: Version checks and dependency installation (steps 1–6)
+# Phase 1: Version checks and dependency installation
 "${SCRIPTS_DIR}/check_versions.sh"
 echo ""
 
-# Phase 2: Static validation (steps 7–17)
+# Phase 2: Static validation — compose, backend, frontend
 "${SCRIPTS_DIR}/check_static.sh"
 echo ""
 
-# Phase 3: Infrastructure and migrations (steps 18–23)
+# Phase 3: Infrastructure and migrations
 # CLEANUP_INFRA=false so services remain running for check_runtime.sh
 CLEANUP_INFRA=false "${SCRIPTS_DIR}/check_infrastructure.sh"
 echo ""
 
-# Phase 4: Runtime checks — normal operation, degradation, recovery (steps 24–47)
+# Phase 4: Runtime checks — normal operation, degradation, recovery
 "${SCRIPTS_DIR}/check_runtime.sh"
 echo ""
 
-# Phase 5: Security scans (steps 48–50)
+# Phase 5: Security scans — secrets + dependency CVEs
 "${SCRIPTS_DIR}/check_security.sh"
 echo ""
 

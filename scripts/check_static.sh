@@ -1,44 +1,21 @@
 #!/usr/bin/env bash
-# check_static.sh — Static validation: format, lint, typecheck, tests, build, import check.
-# Does not require infrastructure to be running.
+# check_static.sh — Static validation orchestrator.
+# Delegates to leaf scripts so that local and CI share the same validation logic.
+#
+# Leaf scripts called:
+#   check_compose.sh   — Docker Compose configuration validation
+#   check_backend.sh   — ruff, pyright, pytest, import check (includes uv sync --locked)
+#   check_frontend.sh  — prettier, eslint, tsc, vitest, next build (includes pnpm install)
+#
+# Does not require infrastructure to be running (tests are unit tests with mocked deps).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-API_DIR="${REPO_ROOT}/services/api"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== [static] Static validation ==="
 
-echo "  [1/11] Validate Docker Compose configuration"
-docker compose -f "${REPO_ROOT}/infrastructure/docker-compose.yml" config --quiet
-
-echo "  [2/11] Backend format check (ruff)"
-cd "${API_DIR}" && uv run ruff format --check .
-
-echo "  [3/11] Frontend format check (prettier)"
-cd "${REPO_ROOT}" && pnpm run --filter web format:check
-
-echo "  [4/11] Backend lint (ruff)"
-cd "${API_DIR}" && uv run ruff check .
-
-echo "  [5/11] Frontend lint (eslint)"
-cd "${REPO_ROOT}" && pnpm run --filter web lint
-
-echo "  [6/11] Backend type check (pyright)"
-cd "${API_DIR}" && uv run pyright
-
-echo "  [7/11] Frontend type check (tsc)"
-cd "${REPO_ROOT}" && pnpm run --filter web typecheck
-
-echo "  [8/11] Backend tests (pytest)"
-cd "${API_DIR}" && uv run pytest -v
-
-echo "  [9/11] Frontend tests (vitest)"
-cd "${REPO_ROOT}" && pnpm run --filter web test
-
-echo "  [10/11] Frontend production build (next build)"
-cd "${REPO_ROOT}" && pnpm run --filter web build
-
-echo "  [11/11] Backend import validation"
-cd "${API_DIR}" && uv run python -c "from app.main import app; print('  API import OK')"
+"${SCRIPTS_DIR}/check_compose.sh"
+"${SCRIPTS_DIR}/check_backend.sh"
+"${SCRIPTS_DIR}/check_frontend.sh"
 
 echo "=== [static] All static checks passed ==="

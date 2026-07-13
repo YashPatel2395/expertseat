@@ -369,7 +369,67 @@ GET /repos/YashPatel2395/expertseat/branches/main/protection/required_pull_reque
 
 ---
 
+---
+
+## 9. Final CI/Local Parity Finding (2026-07-13)
+
+### Defect
+
+The Makefile previously claimed: "All validation logic lives in scripts/check_all.sh — CI calls the same scripts." That claim was false.
+
+**Actual state before this fix:**
+
+| CI job | What it actually did |
+|---|---|
+| `secret-scan` | Used `gitleaks/gitleaks-action@v3.0.0` (a GitHub Action wrapper). Did not call any repository script. |
+| `infra-validate` | Ran `docker compose ... config --quiet` inline. Did not call any repository script. |
+| `frontend` | Ran all pnpm commands inline (`pnpm install`, `format:check`, `lint`, `typecheck`, `test`, `build`). Did not call any repository script. |
+| `backend` | Ran all uv/ruff/pyright/pytest commands inline. Used `uv sync --extra dev` (missing `--locked`). Did not call any repository script. |
+| `migrations` | Ran alembic commands inline. Used `uv sync --extra dev` (missing `--locked`). Did not call any repository script. |
+| `audit` | Ran pip-audit and pnpm audit inline. Used `uv sync --extra dev` (missing `--locked`). Did not call any repository script. |
+| `runtime` | Correctly called `scripts/check_infrastructure.sh` and `scripts/check_runtime.sh`. This was the only job with parity. |
+
+**Secondary defect:** Three CI jobs (`backend`, `migrations`, `audit`) used `uv sync --extra dev` instead of `uv sync --locked --extra dev`, allowing dependency drift between CI installs.
+
+**Tertiary defect:** The secret-scan job used `gitleaks/gitleaks-action` (a third-party wrapper with no pinned version of the gitleaks binary) rather than downloading the official gitleaks binary at an exact version with checksum verification.
+
+### Fix applied (2026-07-13)
+
+Six new leaf scripts created, each responsible for exactly one CI job's validation logic:
+
+| Script | Used by |
+|---|---|
+| `scripts/check_compose.sh` | `check_static.sh` (local), `infra-validate` CI job |
+| `scripts/check_frontend.sh` | `check_static.sh` (local), `frontend` CI job |
+| `scripts/check_backend.sh` | `check_static.sh` (local), `backend` CI job |
+| `scripts/check_migrations.sh` | `backend` CI job (migration cycle) |
+| `scripts/check_secrets.sh` | `check_security.sh` (local), `secret-scan` CI job |
+| `scripts/check_dependencies.sh` | `check_security.sh` (local), `audit` CI job |
+
+`check_static.sh` and `check_security.sh` are now thin orchestrators that call the leaf scripts.
+
+`check_all.sh` (invoked by `make check`) calls `check_static.sh` and `check_security.sh`, which in turn call the leaf scripts — the same scripts called by each CI job.
+
+CI changes:
+- `secret-scan`: replaced `gitleaks/gitleaks-action` with explicit binary download, SHA256 checksum verification via the official `checksums.txt` from the same release, and a call to `scripts/check_secrets.sh` (which also enforces exact version 8.30.1 before scanning)
+- `infra-validate`: now calls `scripts/check_compose.sh`
+- `frontend`: now calls `scripts/check_frontend.sh` (pnpm install happens inside the script)
+- `backend`: now calls `scripts/check_backend.sh` (`uv sync --locked --extra dev` happens inside the script)
+- `migrations`: now calls `scripts/check_migrations.sh` (`uv sync --locked --extra dev` happens inside the script)
+- `audit`: now calls `scripts/check_dependencies.sh` (`uv sync --locked --extra dev` and `pnpm install --frozen-lockfile` happen inside the script)
+- `runtime`: unchanged (already had parity)
+
+`check_versions.sh` updated to fail immediately if gitleaks is not exactly 8.30.1 (was previously a warning only).
+
 ### Evidence required for acceptance
+
+- `grep -R "uv sync --extra dev" .github scripts Makefile` returns no output
+- `make check` exits 0 with gitleaks 8.30.1 installed locally
+- CI run on this commit: all 7 jobs green with the exact required names
+
+---
+
+### Evidence required for acceptance (Round 1 + Round 2)
 
 Round 1 + Round 2:
 - `pnpm install --frozen-lockfile` from root: passes

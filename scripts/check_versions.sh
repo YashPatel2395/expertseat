@@ -33,11 +33,13 @@ UV_VER=$(uv --version | awk '{print $2}')
 echo "  uv: ${UV_VER}"
 [ "${UV_VER}" = "${PINNED_UV}" ] || { echo "ERROR: uv ${PINNED_UV} required, got ${UV_VER}"; exit 1; }
 
-# Gitleaks — must be present; version is recorded for audit evidence
+# Gitleaks — must be exactly 8.30.1 (same check as check_secrets.sh enforces at scan time)
+PINNED_GITLEAKS="8.30.1"
 if command -v gitleaks >/dev/null 2>&1; then
   GL_VER=$(gitleaks version 2>&1 | awk '{print $1}')
   echo "  gitleaks: ${GL_VER}"
-  echo "  (reviewed version for audit: 8.30.1; installed: ${GL_VER})"
+  [ "${GL_VER}" = "${PINNED_GITLEAKS}" ] \
+    || { echo "ERROR: gitleaks ${PINNED_GITLEAKS} required, got ${GL_VER}"; exit 1; }
 else
   echo "ERROR: gitleaks is not installed."
   echo "  Install: brew install gitleaks"

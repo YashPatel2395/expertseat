@@ -29,13 +29,13 @@ echo "    All prerequisites found."
 
 # Install frontend dependencies
 echo "==> Installing frontend dependencies..."
-cd "$REPO_ROOT/apps/web"
-pnpm install
+cd "$REPO_ROOT"
+pnpm install --frozen-lockfile
 
 # Install backend dependencies
 echo "==> Installing backend dependencies..."
 cd "$REPO_ROOT/services/api"
-uv sync --extra dev
+uv sync --locked --extra dev
 
 # Copy .env.example if .env doesn't exist
 if [ ! -f "$REPO_ROOT/.env" ]; then

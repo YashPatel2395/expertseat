@@ -110,11 +110,11 @@ audit:
 	pnpm audit --audit-level high
 
 # ─── Full quality gate ───────────────────────────────────────────────────────
-# Complete 54-step gate: versions, static analysis, infrastructure, runtime
+# Full gate: versions, static analysis, infrastructure, runtime
 # (including degradation/recovery), and security scans.
 # Run with: make check
-# Requires: Docker running, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks.
-# All validation logic lives in scripts/check_all.sh — CI calls the same scripts.
+# Requires: Docker running, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks 8.30.1.
+# Delegates to scripts/check_all.sh, which calls the same leaf scripts used by CI.
 check:
 	scripts/check_all.sh
 
