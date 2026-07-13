@@ -37,12 +37,40 @@ class Settings(BaseSettings):
     redis_connect_timeout: int = 2
     redis_socket_timeout: int = 2
 
+    # Auth — SECRET_KEY must be overridden in production.
+    # The default is rejected by the production model validator.
+    # Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+    secret_key: str = "dev-only-do-not-use-in-production-change-me-00"
+
+    # Token lifetimes (seconds)
+    access_token_ttl: int = 600  # 10 minutes
+    refresh_token_ttl: int = 1_209_600  # 14 days
+
+    # Rate limiting (fixed-window)
+    rate_limit_auth_max: int = 10  # max attempts per window
+    rate_limit_auth_window: int = 60  # window in seconds
+
+    # Email (SMTP — dev default matches Mailpit in docker-compose.yml)
+    mailpit_host: str = "localhost"
+    mailpit_port: int = 1025
+    email_from: str = "noreply@expertseat.local"
+
     @field_validator("app_env")
     @classmethod
     def validate_env(cls, v: str) -> str:
         allowed = {"development", "test", "production"}
         if v not in allowed:
             raise ValueError(f"app_env must be one of {allowed}")
+        return v
+
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError(
+                "SECRET_KEY must be at least 32 characters. "
+                'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"'
+            )
         return v
 
     @model_validator(mode="after")
@@ -55,6 +83,7 @@ class Settings(BaseSettings):
         if self.app_env == "production":
             _dev_db = "postgresql://expertseat:expertseat_dev@localhost:5432/expertseat"
             _dev_redis = "redis://localhost:6379/0"
+            _dev_key = "dev-only-do-not-use-in-production-change-me-00"
             if self.database_url == _dev_db:
                 raise ValueError(
                     "DATABASE_URL must be explicitly set in production; "
@@ -63,6 +92,11 @@ class Settings(BaseSettings):
             if self.redis_url == _dev_redis:
                 raise ValueError(
                     "REDIS_URL must be explicitly set in production; "
+                    "the development default cannot be used"
+                )
+            if self.secret_key == _dev_key:
+                raise ValueError(
+                    "SECRET_KEY must be explicitly set in production; "
                     "the development default cannot be used"
                 )
         return self
