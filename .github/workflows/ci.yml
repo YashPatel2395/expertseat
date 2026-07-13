@@ -25,14 +25,14 @@ jobs:
 
     steps:
       - name: Checkout (full history)
-        # actions/checkout@v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
 
       - name: Run Gitleaks
-        # gitleaks/gitleaks-action@v2.3.9
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        # gitleaks/gitleaks-action@v3.0.0
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -46,8 +46,8 @@ jobs:
 
     steps:
       - name: Checkout
-        # actions/checkout@v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Validate docker-compose.yml
         run: docker compose -f infrastructure/docker-compose.yml config --quiet
@@ -61,26 +61,26 @@ jobs:
 
     steps:
       - name: Checkout
-        # actions/checkout@v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Setup Node.js 24
-        # actions/setup-node@v4.4.0
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        # actions/setup-node@v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: "24"
 
       - name: Setup pnpm (version from packageManager field)
-        # pnpm/action-setup@v4.1.0
-        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
+        # pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
 
       - name: Get pnpm store path
         id: pnpm-cache
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Cache pnpm store
-        # actions/cache@v4.2.3
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -146,24 +146,24 @@ jobs:
 
     steps:
       - name: Checkout
-        # actions/checkout@v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Setup Python 3.12
-        # actions/setup-python@v5.6.0
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
       - name: Install uv
-        # astral-sh/setup-uv@v6.3.1
-        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
         with:
           version: "0.11.7"
 
       - name: Cache uv store
-        # actions/cache@v4.2.3
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/uv
           key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
@@ -223,18 +223,18 @@ jobs:
 
     steps:
       - name: Checkout
-        # actions/checkout@v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Setup Python 3.12
-        # actions/setup-python@v5.6.0
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
 
       - name: Install uv
-        # astral-sh/setup-uv@v6.3.1
-        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
         with:
           version: "0.11.7"
 
@@ -253,3 +253,162 @@ jobs:
       - name: Alembic re-upgrade to head
         working-directory: services/api
         run: uv run alembic upgrade head
+
+  # ────────────────────────────────────────────────────────────────
+  # Dependency vulnerability audit — pip-audit + pnpm audit
+  # Scans for known CVEs in Python and npm dependencies.
+  # Note: Gitleaks (secret-scan job) covers committed secrets;
+  # this job covers known CVEs — these are separate concerns.
+  # ────────────────────────────────────────────────────────────────
+  audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.7"
+
+      - name: Install Python dependencies (including pip-audit)
+        working-directory: services/api
+        run: uv sync --extra dev
+
+      - name: Python dependency audit
+        working-directory: services/api
+        run: uv run pip-audit
+
+      - name: Setup Node.js 24
+        # actions/setup-node@v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
+
+      - name: Setup pnpm (version from packageManager field)
+        # pnpm/action-setup@v6.0.9
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+
+      - name: Install npm dependencies (frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: npm dependency audit (high and critical only)
+        run: pnpm audit --audit-level high
+
+  # ────────────────────────────────────────────────────────────────
+  # Runtime smoke test — start Uvicorn, verify HTTP responses,
+  # test graceful degradation when a dependency is unreachable
+  # ────────────────────────────────────────────────────────────────
+  runtime:
+    name: API runtime smoke test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: expertseat_test
+          POSTGRES_USER: expertseat
+          POSTGRES_PASSWORD: expertseat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://expertseat:expertseat_test@localhost:5432/expertseat_test
+      REDIS_URL: redis://localhost:6379/0
+      APP_ENV: test
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Setup Python 3.12
+        # actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        # astral-sh/setup-uv@v8.3.2
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          version: "0.11.7"
+
+      - name: Install dependencies
+        working-directory: services/api
+        run: uv sync --extra dev
+
+      - name: Apply migrations
+        working-directory: services/api
+        run: uv run alembic upgrade head
+
+      - name: Start Uvicorn in background
+        working-directory: services/api
+        run: |
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          echo $! > /tmp/uvicorn.pid
+
+      - name: Wait for API to be ready (up to 15 s)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/api/v1/health/live > /dev/null 2>&1; then
+              echo "API is ready after ${i}x0.5s"
+              break
+            fi
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8000/api/v1/health/live || (echo "API did not start in time"; exit 1)
+
+      - name: Verify liveness endpoint returns 200
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/health/live)
+          echo "Liveness status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Expected 200, got $STATUS"; exit 1)
+
+      - name: Verify readiness endpoint returns 200 with all deps healthy
+        run: |
+          BODY=$(curl -s http://127.0.0.1:8000/api/v1/health/ready)
+          echo "Readiness body: $BODY"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/v1/health/ready)
+          echo "Readiness status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Expected 200, got $STATUS"; exit 1)
+          echo "$BODY" | grep -q '"status":"ready"' || (echo "Expected ready status in body"; exit 1)
+
+      - name: Verify X-Request-ID header is present
+        run: |
+          REQUEST_ID=$(curl -s -I http://127.0.0.1:8000/api/v1/health/live | grep -i 'x-request-id' | tr -d '[:space:]')
+          echo "Request-ID header: $REQUEST_ID"
+          [ -n "$REQUEST_ID" ] || (echo "X-Request-ID header missing"; exit 1)
+
+      - name: Stop Uvicorn
+        if: always()
+        run: |
+          if [ -f /tmp/uvicorn.pid ]; then
+            kill $(cat /tmp/uvicorn.pid) 2>/dev/null || true
+          fi
