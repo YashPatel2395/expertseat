@@ -51,15 +51,15 @@ Tests that render React components in isolation with realistic props and interac
 - Currently only covering the `Home` page component
 - Will expand as components are built (Milestone 1+)
 
-### End-to-End Tests (Planned, Milestone 3)
+### End-to-End Tests (Planned, Milestone 4)
 
 Tests that simulate real user workflows through the browser.
 
 - Tool: Playwright
-- Will be added in Milestone 3 when there are real user flows to test
+- Will be added in Milestone 4 when there are real end-to-end interview flows to test
 - Run in CI on merge to `main` only (not on every push, as they are slow)
 
-### AI Evaluation Tests (Planned, Milestone 3)
+### AI Evaluation Tests (Planned, Milestone 4)
 
 Tests that evaluate Role Agent output quality.
 
@@ -73,12 +73,21 @@ Tests that evaluate Role Agent output quality.
 
 Tests that start the actual Uvicorn server and make real HTTP requests. These verify that:
 - The application starts without import errors or configuration failures
-- Health endpoints respond with correct HTTP status codes
+- Health endpoints respond with correct HTTP status codes and exact JSON bodies
 - The readiness endpoint correctly reflects dependency health
-- The `X-Request-ID` response header is present on every response
+- The `X-Request-ID` response header is present and is a valid UUID on every response
 - The readiness endpoint returns 503 (degraded) when a dependency is unavailable
+- The readiness endpoint recovers to 200 when a dependency is restored
+- Graceful degradation: when PostgreSQL is stopped, readiness returns `database: unavailable` but `redis: ok`; when Redis is stopped, readiness returns `redis: unavailable` but `database: ok`; liveness always returns 200 regardless of dependency state
 
-These run in CI as the `runtime` job, with real PostgreSQL and Redis service containers. They complement unit tests by catching issues that only appear when the full stack is running (e.g., middleware ordering, CORS headers, port binding).
+These run in CI as the `runtime` job. The job uses Docker Compose (not GitHub Actions `services:`) so that individual containers can be stopped and restarted to test degradation and recovery. The job delegates to `scripts/check_infrastructure.sh` (migration cycle) and `scripts/check_runtime.sh` (HTTP verification and degradation tests).
+
+### Evidence Integrity Tests (Planned, Milestone 5)
+
+Tests that verify "no evidence, no score" enforcement:
+- Observations without evidence citations are flagged, not scored
+- "Insufficient evidence" is returned explicitly when evidence is below threshold
+- Evidence citations are traceable back to source documents
 
 ### Meeting Integration Tests (Planned, Milestone 7 — Zoom integration)
 
@@ -98,9 +107,13 @@ Tests that verify meeting connector behavior (Zoom join/leave, audio stream, mes
 ```
 services/api/tests/
 ├── conftest.py       — fixtures: TestClient with mocked database and Redis
-├── test_health.py    — liveness and readiness endpoint tests
+├── test_health.py    — liveness (exact body, independent of deps), readiness (healthy,
+│                        db down, redis down, both down, no sensitive data in response),
+│                        X-Request-ID (generated UUID, accept valid incoming, reject malformed,
+│                        reject oversized, independent across requests)
 └── test_config.py    — Settings validation: defaults, env overrides, CWD independence,
-                         timeout field existence, default DB URL password correctness
+                         timeout field existence, default DB URL password correctness,
+                         production does not load .env, invalid env raises ValidationError
 ```
 
 Run:
@@ -175,7 +188,7 @@ On every push to `milestone/*`, `fix/*`, and every PR to `main`:
 | `backend` | uv sync, ruff format check, ruff lint, pyright, pytest, import check |
 | `migrations` | alembic upgrade → downgrade → re-upgrade (full cycle) |
 | `audit` | `pip-audit` (Python CVEs) + `pnpm audit --audit-level high` (npm CVEs) |
-| `runtime` | Start Uvicorn, verify `/health/live` 200, `/health/ready` 200, `X-Request-ID` present |
+| `runtime` | Start infrastructure via Docker Compose, run migration cycle, start Uvicorn, verify liveness/readiness/request-ID, then degradation + recovery tests for PostgreSQL, Redis, and both simultaneously |
 
 All jobs must pass before a PR can be merged to `main`.
 

@@ -39,7 +39,11 @@ This document distinguishes between current security measures (implemented) and 
 - Request ID middleware: UUID per request, bound to log context, returned in `X-Request-ID` header
 - Environment config resolves `.env` relative to repo root (not CWD) — deterministic across all invocation contexts
 - Health-check connection timeouts are bounded and configurable (no unbounded OS-level TCP timeouts)
-- Branch protection configured on `main`: required status checks, no force push, no direct push, no deletion
+- Branch protection configured on `main` (verified 2026-07-13 via GitHub API):
+  - Required status checks (strict — branch must be up-to-date): Secret scan (Gitleaks), Validate Docker Compose configuration, Frontend (format, lint, typecheck, test, build), Backend (format, lint, typecheck, test), Database migrations (upgrade → downgrade → upgrade), Dependency vulnerability audit, API runtime smoke test
+  - No force pushes allowed
+  - No direct pushes allowed (enforce_admins: true)
+  - No branch deletion allowed
 
 ### Known gaps at Milestone 0
 
@@ -109,8 +113,8 @@ Candidate data (name, contact, interview responses, assessments) is treated as C
 - Candidates are referenced by UUID internally
 - PII fields are encrypted at rest where possible
 - Candidate data is strictly isolated to the hiring organization
-- Data retention is configurable per org (default: 2 years)
-- Candidates can request data deletion (DSAR workflow, Milestone 7)
+- Data retention is configurable per org (retention period is a legal/privacy review decision — no default is committed here)
+- Candidates can request data deletion (DSAR workflow, Milestone 10)
 - Interview recordings (if any) require explicit multi-party consent
 
 ---
@@ -132,7 +136,7 @@ Blueprint evidence documents are uploaded by recruiters. Risks include:
 
 ---
 
-## Prompt Injection (Planned, Milestone 3)
+## Prompt Injection (Planned, Milestone 4)
 
 AI Role Agents receive input from multiple sources: blueprints (recruiter-controlled), reference documents (recruiter-uploaded), and candidate responses (untrusted). Prompt injection is a real risk.
 
@@ -181,7 +185,7 @@ Audit logs are append-only and not modifiable by application users.
 
 ## Recording Controls
 
-Interview recordings (when meeting connectors are implemented, Milestone 5):
+Interview recordings (when meeting connectors are implemented, Milestone 7):
 - Opt-in only — no default recording
 - Requires consent from all parties (recruiter, all human panelists, candidate)
 - Consent is recorded before recording starts

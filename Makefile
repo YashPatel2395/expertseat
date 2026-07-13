@@ -102,41 +102,13 @@ audit:
 	pnpm audit --audit-level high
 
 # ─── Full quality gate ───────────────────────────────────────────────────────
-# Every step must pass. A failure anywhere halts the gate.
+# Complete 54-step gate: versions, static analysis, infrastructure, runtime
+# (including degradation/recovery), and security scans.
 # Run with: make check
-# Requires: Docker running, infrastructure started (make dev-infra-wait).
-# CI equivalent: each step runs as a separate job.
+# Requires: Docker running, Node.js 24, pnpm 11.12.0, Python 3.12, uv 0.11.7, gitleaks.
+# All validation logic lives in scripts/check_all.sh — CI calls the same scripts.
 check:
-	@echo "=== [1/14] Validate Docker Compose configuration ==="
-	$(MAKE) infra-validate
-	@echo "=== [2/14] pnpm install (frozen) ==="
-	pnpm install --frozen-lockfile
-	@echo "=== [3/14] Backend format check ==="
-	cd $(API_DIR) && uv run ruff format --check .
-	@echo "=== [4/14] Frontend format check ==="
-	pnpm run --filter web format:check
-	@echo "=== [5/14] Backend lint ==="
-	cd $(API_DIR) && uv run ruff check .
-	@echo "=== [6/14] Frontend lint ==="
-	pnpm run --filter web lint
-	@echo "=== [7/14] Backend type check ==="
-	cd $(API_DIR) && uv run pyright
-	@echo "=== [8/14] Frontend type check ==="
-	pnpm run --filter web typecheck
-	@echo "=== [9/14] Backend tests ==="
-	cd $(API_DIR) && uv run pytest -v
-	@echo "=== [10/14] Frontend tests ==="
-	pnpm run --filter web test
-	@echo "=== [11/14] Frontend production build ==="
-	pnpm run --filter web build
-	@echo "=== [12/14] Database migration cycle (upgrade → downgrade → upgrade) ==="
-	$(MAKE) migrate-full
-	@echo "=== [13/14] Backend API startup validation ==="
-	cd $(API_DIR) && uv run python -c "from app.main import app; print('API startup OK')"
-	@echo "=== [14/14] Dependency vulnerability audit ==="
-	$(MAKE) audit
-	@echo ""
-	@echo "All quality gate checks passed."
+	scripts/check_all.sh
 
 # ─── Clean up ────────────────────────────────────────────────────────────────
 

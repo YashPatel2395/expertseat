@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import _REPO_ROOT, Settings  # noqa: F401
 
@@ -32,7 +33,7 @@ def test_explicit_env_override(monkeypatch):
 
 
 def test_invalid_env():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings(app_env="invalid")
 
 
@@ -75,3 +76,20 @@ def test_settings_cwd_independent(tmp_path, monkeypatch):
         assert s.app_env == "development"
     finally:
         os.chdir(original_cwd)
+
+
+def test_production_does_not_load_dotenv(monkeypatch):
+    """In production, Settings() must skip the .env file entirely.
+
+    Sets APP_ENV=production and overrides DATABASE_URL to a sentinel that does
+    NOT appear in .env.  If .env were loaded, it would overwrite DATABASE_URL
+    with the dev value (which contains 'expertseat_dev'), causing this assertion
+    to fail.
+    """
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://sentinel:sentinel@localhost/sentinel")
+    s = Settings()
+    assert s.app_env == "production"
+    assert "sentinel" in s.database_url, (
+        "In production, DATABASE_URL should come from env var, not from .env file"
+    )

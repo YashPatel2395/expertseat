@@ -246,6 +246,59 @@ Requests have no correlation ID. Log lines for the same request cannot be correl
 
 ---
 
+## Round 2 CI Failure (CI run 29230207328, head 8e341be)
+
+### Jobs failed
+
+1. `Frontend (format, lint, typecheck, test, build)` — failed at "Setup pnpm (version from packageManager field)"
+2. `Dependency vulnerability audit` — failed at "Setup pnpm (version from packageManager field)"
+
+All downstream steps in both jobs were skipped.
+
+### Exact failure message
+
+```
+Switching pnpm from v11.7.0 to v11.12.0...
+[ERROR] Cannot use 'in' operator to search for 'integrity' in undefined
+pnpm: Cannot use 'in' operator to search for 'integrity' in undefined
+    at createFullPkgId (file:///home/runner/setup-pnpm/node_modules/pnpm/dist/pnpm.mjs:154891:19)
+    at lockfileToDepGraph (...)
+    at hashDependencyPaths (...)
+    ...
+##[error]Something went wrong, self-installer exits with code 1
+```
+
+### Root cause
+
+`pnpm/action-setup@v6.0.9` (SHA `0ebf47130e4866e96fce0953f49152a61190b271`) uses pnpm's own self-installer mechanism to switch from the runner's default pnpm version (v11.7.0) to the target version (v11.12.0). The self-installer reads its own lockfile to determine what packages to install. The lockfile format used by pnpm v11.12.0's self-installer is incompatible with the pnpm v11.7.0 that is available on the runner, causing the `Cannot use 'in' operator to search for 'integrity' in undefined` crash during lockfile parsing at `createFullPkgId`.
+
+This is a pnpm self-installer version compatibility issue, not a problem with the repository's own `pnpm-lock.yaml`.
+
+### Fix
+
+Replace `pnpm/action-setup` with Node.js Corepack, which is bundled with Node.js 16.9+ and installs the exact pnpm version declared in `package.json`'s `packageManager` field without using pnpm to install pnpm:
+
+```yaml
+- name: Enable pnpm via Corepack (version from packageManager field)
+  run: |
+    corepack enable pnpm
+    corepack prepare pnpm@11.12.0 --activate
+
+- name: Verify pnpm version is exactly 11.12.0
+  run: |
+    PNPM_VER=$(pnpm --version)
+    echo "pnpm version: $PNPM_VER"
+    [ "$PNPM_VER" = "11.12.0" ] || (echo "ERROR: Expected pnpm 11.12.0, got $PNPM_VER"; exit 1)
+```
+
+This approach:
+- Is deterministic: installs exactly pnpm 11.12.0 regardless of what the runner has pre-installed
+- Does not depend on pnpm's self-installer mechanism
+- Is consistent with the `packageManager: pnpm@11.12.0` field in `package.json`
+- Verifies the installed version explicitly before proceeding
+
+---
+
 ## 7. Remediation Plan
 
 ### Branch

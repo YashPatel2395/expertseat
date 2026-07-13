@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic import field_validator
@@ -43,6 +44,21 @@ class Settings(BaseSettings):
         if v not in allowed:
             raise ValueError(f"app_env must be one of {allowed}")
         return v
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        # In production, skip the .env file to avoid accidentally loading
+        # development credentials into a production process.
+        if os.getenv("APP_ENV") == "production":
+            return (init_settings, env_settings, file_secret_settings)
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
 
 def get_settings() -> Settings:

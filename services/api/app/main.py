@@ -1,3 +1,4 @@
+import re
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -24,7 +25,6 @@ if settings.app_env == "production":
     structlog.configure(
         processors=[
             *_shared_processors,
-            structlog.processors.dict_tracebacks,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -48,12 +48,27 @@ logger = structlog.get_logger()
 # ─── Request ID middleware ────────────────────────────────────────────────────
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Generate a UUID per request, bind it to the structlog context, and return
-    it in the X-Request-ID response header."""
+    it in the X-Request-ID response header.
+
+    If the client sends a valid UUID in X-Request-ID (max 36 chars), that value
+    is echoed back. Oversized or malformed values are silently replaced with a
+    server-generated UUID.
+    """
 
     async def dispatch(self, request: Request, call_next):
-        request_id = str(uuid.uuid4())
+        incoming = request.headers.get("X-Request-ID", "")
+        if len(incoming) <= 36 and _UUID_RE.match(incoming):
+            request_id = incoming
+        else:
+            request_id = str(uuid.uuid4())
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response = await call_next(request)

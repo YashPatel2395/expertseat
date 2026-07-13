@@ -98,13 +98,13 @@ erDiagram
 
 | Entity Group | Planned Milestone |
 |---|---|
-| Organization, User | Milestone 1 |
-| Blueprint, BlueprintVersion | Milestone 2 |
-| Candidate, ConsentRecord | Milestone 2 |
-| Interview, InterviewEvent | Milestone 3 |
-| Report, Observation, ObservationReview | Milestone 3 |
-| MeetingSession (video/audio) | Milestone 5 |
-| AuditLog | Milestone 1 |
+| Organization, User, AuditLog | Milestone 1 |
+| Blueprint, BlueprintVersion, EvidenceDocument | Milestone 2 |
+| Candidate, ConsentRecord | Milestone 3 |
+| Interview, InterviewLifecycleEvent | Milestone 3 |
+| InterviewEvent, AgentObservation | Milestone 4 |
+| Report, Observation, ObservationReview | Milestone 5 |
+| MeetingSession (video/audio) | Milestone 7 |
 
 ---
 
@@ -126,7 +126,7 @@ All endpoints are under `/api/v1/`.
 
 ---
 
-### AI Provider Abstraction (Planned, Milestone 3)
+### AI Provider Abstraction (Planned, Milestone 4)
 
 The system is designed to avoid lock-in to a single AI provider. All model calls go through a provider abstraction layer:
 
@@ -137,13 +137,13 @@ class AIProvider(Protocol):
     async def embed(self, text: str) -> list[float]: ...
 ```
 
-Planned initial support: OpenAI and Anthropic Claude (specific models to be selected at Milestone 3 based on capability and pricing at that time). The abstraction allows swapping providers per Blueprint or per org.
+Planned initial support: configurable at Milestone 4 — specific provider and models to be selected based on capability and pricing at that time. The abstraction allows swapping providers per Blueprint or per org.
 
 ---
 
-### Meeting Connector Abstraction (Planned, Milestone 5)
+### Meeting Connector Abstraction (Contract: Milestone 6, Implementation: Milestone 7)
 
-Video interview integration is abstracted behind a connector interface. The interview intelligence layer must not contain any platform-specific reasoning — all Zoom, Webex, or other platform specifics belong inside the connector, not the agent.
+Video interview integration is abstracted behind a connector interface. The connector contract is defined in Milestone 6 (Zoom feasibility spike); the first implementation ships in Milestone 7 (Zoom integration). The interview intelligence layer must not contain any platform-specific reasoning — all Zoom, Webex, or other platform specifics belong inside the connector, not the agent.
 
 ```python
 # Planned interface — not yet implemented
@@ -163,9 +163,9 @@ class MeetingConnector(Protocol):
 ```
 
 Platform order (see ADR-021):
-- **Zoom** — first connector, Milestone 7 (after feasibility spike in Milestone 6)
+- **Zoom** — first connector; feasibility spike in Milestone 6, implementation in Milestone 7
 - **Webex** — possible follow-on after Zoom is stable in production; not committed
-- **Google Meet** — explicitly out of scope for the initial MVP
+- **Google Meet** — explicitly out of scope for the initial MVP; will not be implemented in the committed milestone sequence
 
 The Role Agent joins as a disclosed, named participant and uses TTS to participate verbally (see ADR-020). A static profile image is used — no generated video avatar.
 
@@ -208,30 +208,32 @@ Planned implementation:
 
 ### Deployment (Planned, Milestone 9)
 
-Target: Kubernetes on a major cloud provider (provider TBD).
+Target: **Modular monolith** on a major cloud provider (provider TBD), backed by managed services. The container orchestration approach (serverless containers, managed container services, or otherwise) is deferred to Milestone 9 when the actual infrastructure requirements are understood.
+
+The application is structured as a modular monolith: a single deployable FastAPI service with clearly bounded internal modules (auth, blueprints, interviews, reports, meeting connectors). Modules communicate in-process, not over the network, until there is a demonstrated need to extract a service.
 
 ```mermaid
 graph LR
-    subgraph K8s Cluster
-        ING[Ingress / TLS]
-        WEB_DEP[web Deployment]
-        API_DEP[api Deployment]
-        WORKER[agent-worker Deployment]
+    subgraph Cloud Platform
+        ING[Load Balancer / TLS]
+        WEB_SVC[Next.js (managed hosting)]
+        API_SVC[FastAPI (containerized)]
     end
 
     subgraph Managed Services
-        RDS[(RDS PostgreSQL)]
-        ELASTICACHE[(ElastiCache Redis)]
-        S3_STORE[(S3 / Object Storage)]
+        PG[(Managed PostgreSQL)]
+        REDIS[(Managed Redis)]
+        S3_STORE[(Object Storage)]
     end
 
-    ING --> WEB_DEP
-    ING --> API_DEP
-    API_DEP --> WORKER
-    API_DEP --> RDS
-    API_DEP --> ELASTICACHE
-    WORKER --> S3_STORE
+    ING --> WEB_SVC
+    ING --> API_SVC
+    API_SVC --> PG
+    API_SVC --> REDIS
+    API_SVC --> S3_STORE
 ```
+
+**Rationale**: Kubernetes adds significant operational overhead and is premature for an early-stage product. Managed services (RDS, ElastiCache, S3-compatible storage) provide reliability and scaling without requiring a cluster. The decision to adopt container orchestration is deferred to when scale or operational requirements justify it.
 
 ---
 
@@ -250,6 +252,6 @@ See [DECISIONS.md](./DECISIONS.md) for full context on each decision.
 | Package manager (BE) | uv | Decided |
 | Monorepo tooling | Simple scripts (no turborepo yet) | Decided |
 | Auth approach | JWT + session tokens | Planned |
-| AI provider | Abstracted (OpenAI first) | Planned |
-| Meeting connector | Abstracted (Zoom first) | Planned |
-| Deployment platform | Kubernetes (provider TBD) | Planned |
+| AI provider | Abstracted (provider selected at Milestone 4) | Planned |
+| Meeting connector | Abstracted (Zoom: feasibility M6, implementation M7) | Planned |
+| Deployment platform | Modular monolith + managed services (orchestration TBD at M9) | Planned |

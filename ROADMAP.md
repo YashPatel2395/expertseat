@@ -191,7 +191,7 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 - [ ] Risk register updated with actual findings from the spike
 - [ ] Decision: proceed with Zoom integration or revise approach
 
-**Entry criteria**: Milestone 4 merged; Zoom developer account and test credentials available
+**Entry criteria**: Milestone 5 complete; Zoom developer account and test credentials available
 
 **Exit criteria**:
 - A bot has joined a real Zoom meeting, received audio, and returned audio
@@ -306,7 +306,7 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 
 ## Milestone 11 — Pilot Readiness
 
-**Goal**: First paying organizations using the platform in production.
+**Goal**: ExpertSeat is ready to begin a controlled pilot with selected organizations.
 
 **Status**: Not Started
 
@@ -314,7 +314,6 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 - [ ] Onboarding flow for new organizations
 - [ ] Support tooling (ticketing, status page)
 - [ ] Terms of service and privacy policy published
-- [ ] Billing integration
 - [ ] SLA commitments documented
 - [ ] Platform review approved (Zoom)
 
@@ -322,8 +321,10 @@ Milestones are sequential unless a dependency is explicitly noted. Each has entr
 
 **Exit criteria**:
 - At least one pilot organization is onboarded and using the platform
-- Billing is active
 - Legal documents are published and accepted by users
+- Support and incident-response processes are in place
+
+**Note**: Billing is deferred to after the pilot phase. Pilot participants are not charged.
 
 ---
 
