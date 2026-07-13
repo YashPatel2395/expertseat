@@ -192,7 +192,8 @@ jobs:
 
       - name: Validate API imports and startup
         working-directory: services/api
-        run: uv run python -c "from app.main import app; print('API startup: OK')"
+        run: |
+          uv run python -c "from app.main import app; print('API startup OK')"
 
   # ────────────────────────────────────────────────────────────────
   # Database migrations — full upgrade → downgrade → re-upgrade cycle
