@@ -1,6 +1,6 @@
 .PHONY: setup dev-infra dev-infra-wait dev format format-check lint typecheck test \
         migrate migrate-down migrate-up migrate-full build check secret-scan \
-        infra-validate clean stop
+        infra-validate audit clean stop
 
 COMPOSE := docker compose -f infrastructure/docker-compose.yml
 API_DIR  := services/api
@@ -94,31 +94,47 @@ secret-scan:
 		exit 1; \
 	fi
 
+# Run dependency vulnerability audits for both frontend and backend
+audit:
+	@echo "=== Python dependency audit ==="
+	cd $(API_DIR) && uv run pip-audit
+	@echo "=== npm dependency audit (high+critical only) ==="
+	pnpm audit --audit-level high
+
 # ─── Full quality gate ───────────────────────────────────────────────────────
 # Every step must pass. A failure anywhere halts the gate.
 # Run with: make check
-# CI equivalent: each step runs as a separate job step.
+# Requires: Docker running, infrastructure started (make dev-infra-wait).
+# CI equivalent: each step runs as a separate job.
 check:
-	@echo "=== [1/10] Validate Docker Compose configuration ==="
+	@echo "=== [1/14] Validate Docker Compose configuration ==="
 	$(MAKE) infra-validate
-	@echo "=== [2/10] Backend format check ==="
+	@echo "=== [2/14] pnpm install (frozen) ==="
+	pnpm install --frozen-lockfile
+	@echo "=== [3/14] Backend format check ==="
 	cd $(API_DIR) && uv run ruff format --check .
-	@echo "=== [3/10] Frontend format check ==="
+	@echo "=== [4/14] Frontend format check ==="
 	pnpm run --filter web format:check
-	@echo "=== [4/10] Backend lint ==="
+	@echo "=== [5/14] Backend lint ==="
 	cd $(API_DIR) && uv run ruff check .
-	@echo "=== [5/10] Frontend lint ==="
+	@echo "=== [6/14] Frontend lint ==="
 	pnpm run --filter web lint
-	@echo "=== [6/10] Backend type check ==="
+	@echo "=== [7/14] Backend type check ==="
 	cd $(API_DIR) && uv run pyright
-	@echo "=== [7/10] Frontend type check ==="
+	@echo "=== [8/14] Frontend type check ==="
 	pnpm run --filter web typecheck
-	@echo "=== [8/10] Backend tests ==="
+	@echo "=== [9/14] Backend tests ==="
 	cd $(API_DIR) && uv run pytest -v
-	@echo "=== [9/10] Frontend tests ==="
+	@echo "=== [10/14] Frontend tests ==="
 	pnpm run --filter web test
-	@echo "=== [10/10] Frontend production build ==="
+	@echo "=== [11/14] Frontend production build ==="
 	pnpm run --filter web build
+	@echo "=== [12/14] Database migration cycle (upgrade → downgrade → upgrade) ==="
+	$(MAKE) migrate-full
+	@echo "=== [13/14] Backend API startup validation ==="
+	cd $(API_DIR) && uv run python -c "from app.main import app; print('API startup OK')"
+	@echo "=== [14/14] Dependency vulnerability audit ==="
+	$(MAKE) audit
 	@echo ""
 	@echo "All quality gate checks passed."
 
