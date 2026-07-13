@@ -1,9 +1,10 @@
 version: 2
 
 updates:
-  # Frontend npm dependencies
+  # Frontend pnpm dependencies
+  # pnpm-lock.yaml lives at the repository root for the workspace.
   - package-ecosystem: "npm"
-    directory: "/apps/web"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"

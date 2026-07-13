@@ -3,68 +3,202 @@ name: CI
 on:
   push:
     branches:
+      - main
       - "milestone/**"
+      - "fix/**"
   pull_request:
     branches:
       - main
 
+# Least-privilege permissions. Jobs that need additional permissions
+# declare them explicitly.
 permissions:
   contents: read
 
 jobs:
-  frontend:
-    name: Frontend (lint, typecheck, test, build)
+  # ────────────────────────────────────────────────────────────────
+  # Secret scanning — runs against full history, not just the diff
+  # ────────────────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history)
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        # gitleaks/gitleaks-action@v2.3.9
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ────────────────────────────────────────────────────────────────
+  # Infrastructure validation — no services started
+  # ────────────────────────────────────────────────────────────────
+  infra-validate:
+    name: Validate Docker Compose configuration
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Validate docker-compose.yml
+        run: docker compose -f infrastructure/docker-compose.yml config --quiet
+
+  # ────────────────────────────────────────────────────────────────
+  # Frontend — format, lint, typecheck, test, build
+  # ────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (format, lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Node.js 24
+        # actions/setup-node@v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "20"
+          node-version: "24"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 8
+      - name: Setup pnpm (version from packageManager field)
+        # pnpm/action-setup@v4.1.0
+        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d
 
-      - name: Get pnpm store directory
+      - name: Get pnpm store path
         id: pnpm-cache
-        shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        # actions/cache@v4.2.3
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
-      - name: Install dependencies
-        working-directory: apps/web
+      - name: Install dependencies (frozen, from workspace root)
         run: pnpm install --frozen-lockfile
 
+      - name: Format check
+        run: pnpm run --filter web format:check
+
       - name: Lint
-        working-directory: apps/web
-        run: pnpm lint
+        run: pnpm run --filter web lint
 
       - name: Type check
-        working-directory: apps/web
-        run: pnpm tsc --noEmit
+        run: pnpm run --filter web typecheck
 
       - name: Test
-        working-directory: apps/web
-        run: pnpm test --run
+        run: pnpm run --filter web test
 
-      - name: Build
-        working-directory: apps/web
-        run: pnpm build
+      - name: Production build
+        run: pnpm run --filter web build
 
+  # ────────────────────────────────────────────────────────────────
+  # Backend — format, lint, typecheck, test
+  # ────────────────────────────────────────────────────────────────
   backend:
-    name: Backend (lint, typecheck, test)
+    name: Backend (format, lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: expertseat_test
+          POSTGRES_USER: expertseat
+          POSTGRES_PASSWORD: expertseat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # APP_ENV=test is set so that: the application starts correctly,
+    # and tests that check default values use monkeypatch to clear it.
+    env:
+      DATABASE_URL: postgresql://expertseat:expertseat_test@localhost:5432/expertseat_test
+      REDIS_URL: redis://localhost:6379/0
+      APP_ENV: test
+
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Setup Python 3.12
+        # actions/setup-python@v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        # astral-sh/setup-uv@v6.3.1
+        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba
+        with:
+          version: "0.11.7"
+
+      - name: Cache uv store
+        # actions/cache@v4.2.3
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        working-directory: services/api
+        run: uv sync --extra dev
+
+      - name: Format check
+        working-directory: services/api
+        run: uv run ruff format --check .
+
+      - name: Lint
+        working-directory: services/api
+        run: uv run ruff check .
+
+      - name: Type check
+        working-directory: services/api
+        run: uv run pyright
+
+      - name: Test
+        working-directory: services/api
+        run: uv run pytest -v
+
+      - name: Validate API imports and startup
+        working-directory: services/api
+        run: uv run python -c "from app.main import app; print('API startup: OK')"
+
+  # ────────────────────────────────────────────────────────────────
+  # Database migrations — full upgrade → downgrade → re-upgrade cycle
+  # ────────────────────────────────────────────────────────────────
+  migrations:
+    name: Database migrations (upgrade → downgrade → upgrade)
     runs-on: ubuntu-latest
 
     services:
@@ -84,47 +218,37 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://expertseat:expertseat_test@localhost:5432/expertseat_test
-      REDIS_URL: redis://localhost:6379/0
       APP_ENV: test
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python 3.12
+        # actions/setup-python@v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        # astral-sh/setup-uv@v6.3.1
+        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba
         with:
-          version: "latest"
-
-      - name: Cache uv
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
+          version: "0.11.7"
 
       - name: Install dependencies
         working-directory: services/api
         run: uv sync --extra dev
 
-      - name: Lint
+      - name: Alembic upgrade to head
         working-directory: services/api
-        run: uv run ruff check .
+        run: uv run alembic upgrade head
 
-      - name: Format check
+      - name: Alembic downgrade to base
         working-directory: services/api
-        run: uv run ruff format --check .
+        run: uv run alembic downgrade base
 
-      - name: Type check
+      - name: Alembic re-upgrade to head
         working-directory: services/api
-        run: uv run pyright
-
-      - name: Test
-        working-directory: services/api
-        run: uv run pytest -v
+        run: uv run alembic upgrade head

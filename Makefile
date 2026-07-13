@@ -1,55 +1,131 @@
-.PHONY: setup dev-infra dev format lint typecheck test migrate build check clean
+.PHONY: setup dev-infra dev-infra-wait dev format format-check lint typecheck test \
+        migrate migrate-down migrate-up migrate-full build check secret-scan \
+        infra-validate clean stop
 
-# Install all dependencies
+COMPOSE := docker compose -f infrastructure/docker-compose.yml
+API_DIR  := services/api
+WEB_DIR  := apps/web
+
+# ─── Setup ──────────────────────────────────────────────────────────────────
+
+# Install all dependencies (run once after clone)
 setup:
-	cd apps/web && pnpm install
-	cd services/api && uv sync --extra dev
+	pnpm install
+	cd $(API_DIR) && uv sync --extra dev
 
-# Start infrastructure services (postgres + redis)
+# ─── Infrastructure ──────────────────────────────────────────────────────────
+
+# Start PostgreSQL and Redis in the background
 dev-infra:
-	docker compose -f infrastructure/docker-compose.yml up -d
+	$(COMPOSE) up -d
 
-# Development instructions
+# Wait until both services are healthy before proceeding
+dev-infra-wait: dev-infra
+	@echo "Waiting for PostgreSQL..."
+	@until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q postgres) 2>/dev/null | grep -q healthy; do sleep 1; done
+	@echo "Waiting for Redis..."
+	@until docker inspect --format='{{.State.Health.Status}}' $$($(COMPOSE) ps -q redis) 2>/dev/null | grep -q healthy; do sleep 1; done
+	@echo "Infrastructure ready."
+
+# Stop infrastructure services
+stop:
+	$(COMPOSE) down
+
+# ─── Development ─────────────────────────────────────────────────────────────
+
 dev:
-	@echo "Run the following commands in separate terminals:"
+	@echo "Run each command in a separate terminal:"
 	@echo "  Terminal 1 (infra):    make dev-infra"
-	@echo "  Terminal 2 (api):      cd services/api && uv run uvicorn app.main:app --reload --port 8000"
-	@echo "  Terminal 3 (frontend): cd apps/web && pnpm dev"
+	@echo "  Terminal 2 (api):      cd $(API_DIR) && uv run uvicorn app.main:app --reload --port 8000"
+	@echo "  Terminal 3 (frontend): pnpm run --filter web dev"
 
-# Format code
+# ─── Code quality ────────────────────────────────────────────────────────────
+
 format:
-	cd services/api && uv run ruff format .
-	cd apps/web && pnpm prettier --write .
+	cd $(API_DIR) && uv run ruff format .
+	pnpm run --filter web format
 
-# Lint code
+format-check:
+	cd $(API_DIR) && uv run ruff format --check .
+	pnpm run --filter web format:check
+
 lint:
-	cd services/api && uv run ruff check .
-	cd apps/web && pnpm eslint .
+	cd $(API_DIR) && uv run ruff check .
+	pnpm run --filter web lint
 
-# Type checking
 typecheck:
-	cd services/api && uv run pyright
-	cd apps/web && pnpm tsc --noEmit
+	cd $(API_DIR) && uv run pyright
+	pnpm run --filter web typecheck
 
-# Run tests
+# ─── Tests ───────────────────────────────────────────────────────────────────
+
 test:
-	cd services/api && uv run pytest
-	cd apps/web && pnpm test
+	cd $(API_DIR) && uv run pytest -v
+	pnpm run --filter web test
 
-# Run database migrations
+# ─── Database migrations ─────────────────────────────────────────────────────
+
 migrate:
-	cd services/api && uv run alembic upgrade head
+	cd $(API_DIR) && uv run alembic upgrade head
 
-# Build frontend
+migrate-down:
+	cd $(API_DIR) && uv run alembic downgrade base
+
+migrate-full: migrate migrate-down migrate
+	@echo "Migration cycle (upgrade → downgrade → upgrade) complete."
+
+# ─── Build ───────────────────────────────────────────────────────────────────
+
 build:
-	cd apps/web && pnpm build
+	pnpm run --filter web build
 
-# Full quality gate
-check: lint typecheck test build
+# ─── Validation ──────────────────────────────────────────────────────────────
 
-# Clean up
+# Validate Docker Compose configuration (no services started)
+infra-validate:
+	$(COMPOSE) config --quiet
+
+# Run Gitleaks secret scan against full git history (requires gitleaks installed)
+secret-scan:
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		gitleaks detect --source . --log-level warn; \
+	else \
+		echo "ERROR: gitleaks is not installed. Install via: brew install gitleaks"; \
+		exit 1; \
+	fi
+
+# ─── Full quality gate ───────────────────────────────────────────────────────
+# Every step must pass. A failure anywhere halts the gate.
+# Run with: make check
+# CI equivalent: each step runs as a separate job step.
+check:
+	@echo "=== [1/10] Validate Docker Compose configuration ==="
+	$(MAKE) infra-validate
+	@echo "=== [2/10] Backend format check ==="
+	cd $(API_DIR) && uv run ruff format --check .
+	@echo "=== [3/10] Frontend format check ==="
+	pnpm run --filter web format:check
+	@echo "=== [4/10] Backend lint ==="
+	cd $(API_DIR) && uv run ruff check .
+	@echo "=== [5/10] Frontend lint ==="
+	pnpm run --filter web lint
+	@echo "=== [6/10] Backend type check ==="
+	cd $(API_DIR) && uv run pyright
+	@echo "=== [7/10] Frontend type check ==="
+	pnpm run --filter web typecheck
+	@echo "=== [8/10] Backend tests ==="
+	cd $(API_DIR) && uv run pytest -v
+	@echo "=== [9/10] Frontend tests ==="
+	pnpm run --filter web test
+	@echo "=== [10/10] Frontend production build ==="
+	pnpm run --filter web build
+	@echo ""
+	@echo "All quality gate checks passed."
+
+# ─── Clean up ────────────────────────────────────────────────────────────────
+
 clean:
-	docker compose -f infrastructure/docker-compose.yml down -v
+	$(COMPOSE) down -v 2>/dev/null || true
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true

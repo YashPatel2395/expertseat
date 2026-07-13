@@ -33,13 +33,20 @@ def readiness():
     if not db_ok:
         all_ok = False
 
+    _redis_client = None
     try:
-        r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
-        r.ping()
+        _redis_client = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
+        _redis_client.ping()
         checks["redis"] = "ok"
     except Exception:
         checks["redis"] = "unavailable"
         all_ok = False
+    finally:
+        if _redis_client is not None:
+            try:
+                _redis_client.close()
+            except Exception:
+                pass
 
     status_code = 200 if all_ok else 503
     return JSONResponse(

@@ -1,0 +1,18 @@
+{
+  "name": "expertseat",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.12.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "format": "pnpm run --filter web format",
+    "format:check": "pnpm run --filter web format:check",
+    "lint": "pnpm run --filter web lint",
+    "typecheck": "pnpm run --filter web typecheck",
+    "test": "pnpm run --filter web test",
+    "build": "pnpm run --filter web build"
+  }
+}
