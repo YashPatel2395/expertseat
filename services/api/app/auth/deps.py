@@ -9,7 +9,7 @@ Dependency chain:
 from dataclasses import dataclass
 
 import jwt
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, HTTPException, status
 
 from app.auth.tokens import decode_access_token
 
@@ -78,8 +78,24 @@ async def get_workspace_context(
 ) -> WorkspaceContext:
     """Return the authenticated user's workspace context from JWT claims.
 
-    This is a thin alias of get_current_user provided for semantic clarity
-    at workspace-scoped endpoint call sites. The workspace context (org_id,
-    membership_id, role) is embedded in the JWT — no DB round-trip required.
+    Raises 403 NO_ACTIVE_WORKSPACE when the JWT carries no org context (org_id
+    is empty).  This happens when a user logs in without any active membership —
+    for example if all their memberships were disabled.  They can still use
+    auth endpoints and create/join an org, but workspace-scoped endpoints are
+    gated here.
+
+    The workspace context (org_id, membership_id, role) is embedded in the JWT
+    — no DB round-trip is required.
     """
+    if not user.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "NO_ACTIVE_WORKSPACE",
+                "message": (
+                    "No active workspace. "
+                    "Please create or join an organization first."
+                ),
+            },
+        )
     return user

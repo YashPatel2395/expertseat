@@ -26,15 +26,15 @@ class AuthSession(Base):
         nullable=False,
         index=True,
     )
-    org_id: Mapped[str] = mapped_column(
+    org_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("organizations.id", ondelete="SET NULL"),
+        nullable=True,
     )
-    membership_id: Mapped[str] = mapped_column(
+    membership_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("memberships.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("memberships.id", ondelete="SET NULL"),
+        nullable=True,
     )
     refresh_token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     family_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)

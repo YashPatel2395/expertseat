@@ -519,4 +519,5 @@ async def send_invitation_email(
         subject=f"You've been invited to join {org.name} on ExpertSeat",
         html_body=html,
         text_body=text,
+        kind="invitation",
     )

@@ -27,6 +27,7 @@ class SmtpEmailProvider:
         subject: str,
         html_body: str,
         text_body: str,
+        kind: str = "",  # noqa: ARG002 — informational only, not used by SMTP
     ) -> None:
         await asyncio.to_thread(self._send_sync, to, subject, html_body, text_body)
 

@@ -16,6 +16,7 @@ class EmailProvider(Protocol):
         subject: str,
         html_body: str,
         text_body: str,
+        kind: str = "",
     ) -> None:
         """Send an email.
 
@@ -24,6 +25,9 @@ class EmailProvider(Protocol):
             subject: Email subject line.
             html_body: HTML content of the email body.
             text_body: Plain-text content of the email body (fallback).
+            kind: Message category ("verification" | "password_reset" | "invitation").
+                  Ignored by production providers; used by FakeEmailProvider for
+                  test assertions without relying on delivery order.
 
         Raises:
             Exception: Any delivery failure. Callers should handle or log.

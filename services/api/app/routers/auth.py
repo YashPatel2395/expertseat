@@ -16,6 +16,7 @@ from app.database import get_db
 from app.email.base import EmailProvider
 from app.email.deps import get_email_provider
 from app.services import auth as auth_service
+from app.services import workspace as workspace_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -87,6 +88,9 @@ async def register(
     user = auth_service.register_user(
         db, email=str(body.email), password=body.password, full_name=body.full_name
     )
+    # Create the user's default workspace atomically with registration.
+    # A self-registering user is always an admin of their initial organization.
+    workspace_service.create_organization(db, f"{user.full_name}'s Workspace", user.id)
     code = auth_service.create_email_verification_token(db, user.id)
     db.commit()
     await auth_service.send_verification_email(provider, user, code)

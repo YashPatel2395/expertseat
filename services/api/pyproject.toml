@@ -38,6 +38,9 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests requiring a real database and Redis",
+]
 
 [tool.pyright]
 pythonVersion = "3.12"

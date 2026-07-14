@@ -203,8 +203,8 @@ def _create_session(
     session = AuthSession(
         id=session_id,
         user_id=user_id,
-        org_id=org_id or user_id,  # placeholder when no org
-        membership_id=membership_id or session_id,  # placeholder
+        org_id=org_id or None,
+        membership_id=membership_id or None,
         refresh_token_hash=refresh_token_hash,
         family_id=family_id,
         ip_address_hash=ip_hash,
@@ -291,29 +291,42 @@ def refresh_session(
             },
         )
 
-    # Rotate token
+    # Rotate: revoke old session, create new session in the same family.
+    # Keeping the old row with its original token hash allows replay detection —
+    # if someone presents the now-revoked token, we find it and can kill the family.
     new_bytes = generate_token_bytes(32)
     new_hex = new_bytes.hex()
     new_hash = sha256_hex(new_bytes)
+    new_session_id = str(uuid.uuid4())
     new_jti = str(uuid.uuid4())
     new_csrf = generate_token_hex(32)
     new_ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()
 
-    session.refresh_token_hash = new_hash
-    session.last_used_at = datetime.now(tz=UTC)
-    session.ip_address_hash = new_ip_hash
-    if user_agent:
-        session.user_agent = user_agent
+    # Mark old session as revoked (its token hash is preserved for replay detection)
+    session.revoked_at = datetime.now(tz=UTC)
 
-    # Look up membership for current role
+    # Inherit org context and membership from the old session
     membership = db.query(Membership).filter(Membership.id == session.membership_id).first()
     role = membership.role if membership else ""
 
-    access_token = create_access_token(
+    new_session = AuthSession(
+        id=new_session_id,
         user_id=session.user_id,
-        session_id=session.id,
         org_id=session.org_id,
         membership_id=session.membership_id,
+        refresh_token_hash=new_hash,
+        family_id=session.family_id,
+        ip_address_hash=new_ip_hash,
+        user_agent=user_agent or session.user_agent,
+        expires_at=datetime.now(tz=UTC) + timedelta(seconds=settings.refresh_token_ttl),
+    )
+    db.add(new_session)
+
+    access_token = create_access_token(
+        user_id=session.user_id,
+        session_id=new_session_id,
+        org_id=session.org_id or "",
+        membership_id=session.membership_id or "",
         role=role,
         jti=new_jti,
     )
@@ -322,7 +335,7 @@ def refresh_session(
         access_token=access_token,
         refresh_token_hex=new_hex,
         csrf_value=new_csrf,
-        session_id=session.id,
+        session_id=new_session_id,
     )
 
 
@@ -528,6 +541,7 @@ async def send_verification_email(
         subject="Verify your ExpertSeat account",
         html_body=html,
         text_body=text,
+        kind="verification",
     )
 
 
@@ -542,4 +556,5 @@ async def send_password_reset_email(
         subject="Reset your ExpertSeat password",
         html_body=html,
         text_body=text,
+        kind="password_reset",
     )

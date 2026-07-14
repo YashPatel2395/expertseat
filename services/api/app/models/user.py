@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -55,7 +55,9 @@ class EmailVerificationToken(Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
     )
-    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     code_hash: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -72,7 +74,9 @@ class PasswordResetToken(Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
     )
-    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -34,9 +34,12 @@ Only the SHA-256 hash is stored: `hashlib.sha256(token_bytes).hexdigest()`. The 
 ### Rotation on every use
 
 Every successful call to `POST /api/v1/auth/refresh`:
-1. Generates a new token
-2. Stores the new hash in `auth_sessions.refresh_token_hash`
-3. Sets a new `es_refresh` cookie
+1. Looks up the `AuthSession` row matching the presented token's SHA-256 hash
+2. Sets `revoked_at = now()` on the old row (preserving its `refresh_token_hash` for replay detection)
+3. Inserts a **new `AuthSession` row** with the same `family_id`, a new `id`, and the new token hash
+4. Sets a new `es_refresh` cookie pointing to the new token
+
+**Why a new row, not an in-place update?** In-place update overwrites the old hash, so a replayed (rotated-out) token produces `INVALID_REFRESH_TOKEN` rather than `REFRESH_TOKEN_REUSED`. Preserving the old row and its hash is what enables replay detection: the lookup finds the revoked-but-matched row and can distinguish "never existed" from "already rotated".
 
 The old token becomes invalid immediately. The window where both old and new tokens are valid is zero.
 
@@ -44,10 +47,13 @@ The old token becomes invalid immediately. The window where both old and new tok
 
 Every session row has a `family_id` (UUID assigned at login and never changed). All rotations of a session share the same `family_id`.
 
-If a token is presented but the session's `refresh_token_hash` no longer matches (meaning the token was already rotated), this is a **replay**:
-- It indicates either a race condition (two concurrent refreshes — acceptable, see below) or token theft (attacker used a stolen token after the legitimate client already rotated it)
-- The entire family is revoked: `UPDATE auth_sessions SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL`
-- The response is 401 REFRESH_TOKEN_REUSED
+When a refresh token is presented:
+1. The system looks for any `AuthSession` where `refresh_token_hash = sha256(token)`.
+2. If found but `revoked_at IS NOT NULL`, this is a **replay** of a rotated token:
+   - The entire family is revoked: `UPDATE auth_sessions SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL`
+   - The response is 401 REFRESH_TOKEN_REUSED
+3. If not found at all, the response is 401 INVALID_REFRESH_TOKEN (token was never issued or was already expired and purged).
+4. If found and `revoked_at IS NULL`, rotation proceeds normally.
 
 This means if an attacker steals a refresh token and the legitimate client refreshes first, the next attacker request triggers family revocation and both sessions are destroyed. If the attacker refreshes first, the legitimate client's next request triggers family revocation and the user must re-authenticate.
 
