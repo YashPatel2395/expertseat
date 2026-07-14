@@ -59,7 +59,9 @@ This means if an attacker steals a refresh token and the legitimate client refre
 
 ### Race condition handling
 
-Two concurrent refresh requests from the same client (e.g., two browser tabs) will race. The second request will see a token mismatch and trigger family revocation, forcing re-login. This is an acceptable trade-off: race conditions on refresh are extremely rare in practice, and the security benefit of replay detection outweighs the UX cost of an occasional re-login.
+Two concurrent refresh requests from the same client (e.g., two browser tabs) will race. The `AuthSession` row is fetched with `SELECT ... FOR UPDATE` before any state change. The loser acquires the lock after the winner has already set `revoked_at`, so the loser sees a revoked row and triggers family revocation, forcing re-login. This is an acceptable trade-off: race conditions on refresh are extremely rare in practice, and the security benefit of replay detection outweighs the UX cost of an occasional re-login.
+
+The `SELECT FOR UPDATE` also prevents a subtle TOCTOU window: without the lock, two concurrent requests could both read the token as unrevoked, both proceed to rotate, and produce two new children from the same parent — breaking the single-chain invariant.
 
 ---
 

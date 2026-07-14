@@ -32,9 +32,7 @@ pytestmark = pytest.mark.integration
 # ── State A: single active membership → org context populated ─────────────────
 
 
-def test_login_with_one_active_membership_carries_org_context(
-    http_client: TestClient, fake_email
-):
+def test_login_with_one_active_membership_carries_org_context(http_client: TestClient, fake_email):
     register_and_verify(http_client, fake_email, "ctx_a@example.com")
     login(http_client, "ctx_a@example.com")
 
@@ -117,9 +115,7 @@ def test_login_with_only_disabled_memberships_issues_no_org_token(
 
     user = db_session.query(User).filter(User.email == "ctx_d@example.com").first()
     assert user is not None
-    db_session.query(Membership).filter(Membership.user_id == user.id).update(
-        {"is_active": False}
-    )
+    db_session.query(Membership).filter(Membership.user_id == user.id).update({"is_active": False})
     db_session.flush()
 
     login(http_client, "ctx_d@example.com")
@@ -216,9 +212,7 @@ def test_switch_org_from_null_context_succeeds_with_valid_membership(
 # ── State H: no fake UUID stored as org_id or membership_id ──────────────────
 
 
-def test_no_fake_uuid_stored_as_org_id(
-    http_client: TestClient, fake_email, db_session: SASession
-):
+def test_no_fake_uuid_stored_as_org_id(http_client: TestClient, fake_email, db_session: SASession):
     register_and_verify(http_client, fake_email, "ctx_h@example.com")
 
     from app.models.session import AuthSession
@@ -262,8 +256,6 @@ def test_raw_refresh_token_not_stored_in_db(
     user = db_session.query(User).filter(User.email == "ctx_i@example.com").first()
     assert user is not None
 
-    sessions = (
-        db_session.query(AuthSession).filter(AuthSession.user_id == user.id).all()
-    )
+    sessions = db_session.query(AuthSession).filter(AuthSession.user_id == user.id).all()
     stored_hashes = {s.refresh_token_hash for s in sessions}
     assert raw_refresh not in stored_hashes, "Raw refresh token must not be stored; only its hash"

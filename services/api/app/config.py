@@ -45,10 +45,14 @@ class Settings(BaseSettings):
     # Token lifetimes (seconds)
     access_token_ttl: int = 600  # 10 minutes
     refresh_token_ttl: int = 1_209_600  # 14 days
+    password_reset_ttl: int = 1_800  # 30 minutes
 
     # Rate limiting (fixed-window)
     rate_limit_auth_max: int = 10  # max attempts per window
     rate_limit_auth_window: int = 60  # window in seconds
+    # Dedicated HMAC secret for rate-limit key derivation.
+    # Defaults to secret_key if unset; override with a separate value in production.
+    rate_limit_secret: str = ""
 
     # Email (SMTP — dev default matches Mailpit in docker-compose.yml)
     mailpit_host: str = "localhost"

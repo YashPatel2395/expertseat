@@ -54,7 +54,11 @@ def test_non_admin_cannot_read_audit_log(http_client: TestClient, fake_email):
     # Register recruiter and accept invitation
     register_and_verify(http_client, fake_email, "audit_recruiter@example.com")
     login(http_client, "audit_recruiter@example.com")
-    resp = http_client.post("/api/v1/workspace/invitations/accept", json={"token": invite_token})
+    resp = http_client.post(
+        "/api/v1/workspace/invitations/accept",
+        json={"token": invite_token},
+        headers=csrf_headers(http_client),
+    )
     assert resp.status_code == 200
 
     resp = http_client.get("/api/v1/workspace/organizations")

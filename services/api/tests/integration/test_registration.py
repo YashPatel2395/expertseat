@@ -20,7 +20,7 @@ def test_register_creates_user_and_sends_email(
         },
     )
     assert resp.status_code == 201
-    assert "verification code" in resp.json()["message"].lower()
+    assert "email" in resp.json()["message"].lower()
 
     sent = fake_email.last_to("alice@example.com")
     assert sent is not None

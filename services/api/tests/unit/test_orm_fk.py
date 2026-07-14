@@ -15,7 +15,6 @@ Tested invariants:
   7. Membership.org_id has CASCADE FK to organizations.id
 """
 
-
 from app.models.organization import Membership
 from app.models.session import AuthSession
 from app.models.user import EmailVerificationToken, PasswordResetToken

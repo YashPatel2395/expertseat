@@ -71,8 +71,11 @@ All state-mutating route handlers include `_: None = Depends(require_csrf)`.
 - `GET`, `HEAD`, `OPTIONS` endpoints: exempt (read-only, no state mutation)
 - `POST /api/v1/auth/login`: exempt (user is not yet authenticated; CSRF only applies to authenticated sessions)
 - `POST /api/v1/auth/register`: exempt
-- `POST /api/v1/auth/refresh`: exempt (the refresh token itself is the credential; the endpoint is guarded by path restriction to `/api/v1/auth` and by the HttpOnly cookie that cannot be read cross-site)
-- `POST /api/v1/workspace/invitations/accept`: exempt (unauthenticated; token in body is the credential)
+- `POST /api/v1/auth/verify-email`: exempt (token in body is the credential; endpoint is idempotent and enumeration-resistant)
+- `POST /api/v1/auth/forgot-password`: exempt (unauthenticated; no state visible to the caller)
+- `POST /api/v1/auth/resend-verification`: exempt (unauthenticated)
+
+All other state-mutating endpoints — including `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `POST /api/v1/auth/logout-all`, `POST /api/v1/auth/switch-org`, and `POST /api/v1/workspace/invitations/accept` — require `X-CSRF-Token`.
 
 ---
 

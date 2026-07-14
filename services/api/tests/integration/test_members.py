@@ -49,7 +49,11 @@ def _setup_org_with_two_members(
     register_and_verify(http_client, fake_email, member_email)
     login(http_client, member_email)
 
-    resp = http_client.post("/api/v1/workspace/invitations/accept", json={"token": invite_token})
+    resp = http_client.post(
+        "/api/v1/workspace/invitations/accept",
+        json={"token": invite_token},
+        headers=csrf_headers(http_client),
+    )
     assert resp.status_code == 200, resp.text
 
     return org

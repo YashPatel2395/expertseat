@@ -1,4 +1,9 @@
-"""Auth router — 14 endpoints for authentication and session management."""
+"""Auth router — 14 endpoints for authentication and session management.
+
+Token delivery policy: access tokens are set ONLY in the HttpOnly es_access cookie.
+They never appear in JSON response bodies. This prevents tokens from entering
+frontend-readable state (localStorage, React state, logs, browser devtools network).
+"""
 
 from __future__ import annotations
 
@@ -22,16 +27,21 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ── Request/response schemas ──────────────────────────────────────────────────
 
+# Centralized password policy: 12–128 characters, unicode supported.
+# Applied consistently to registration, reset, and change-password.
+_PASSWORD_MIN = 12
+_PASSWORD_MAX = 128
+
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=_PASSWORD_MIN, max_length=_PASSWORD_MAX)
     full_name: str = Field(min_length=1, max_length=200)
 
 
 class VerifyEmailRequest(BaseModel):
-    email: EmailStr
-    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    # 64-char hex = 32 random bytes = 256-bit entropy; never a 6-digit code.
+    token: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class ResendVerificationRequest(BaseModel):
@@ -40,7 +50,7 @@ class ResendVerificationRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=_PASSWORD_MAX)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -49,21 +59,16 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=64, max_length=64)
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=_PASSWORD_MIN, max_length=_PASSWORD_MAX)
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=8, max_length=128)
+    current_password: str = Field(min_length=1, max_length=_PASSWORD_MAX)
+    new_password: str = Field(min_length=_PASSWORD_MIN, max_length=_PASSWORD_MAX)
 
 
 class SwitchOrgRequest(BaseModel):
     org_id: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
 
 
 class UserResponse(BaseModel):
@@ -89,12 +94,11 @@ async def register(
         db, email=str(body.email), password=body.password, full_name=body.full_name
     )
     # Create the user's default workspace atomically with registration.
-    # A self-registering user is always an admin of their initial organization.
     workspace_service.create_organization(db, f"{user.full_name}'s Workspace", user.id)
-    code = auth_service.create_email_verification_token(db, user.id)
+    token = auth_service.create_email_verification_token(db, user.id)
     db.commit()
-    await auth_service.send_verification_email(provider, user, code)
-    return {"message": "Registration successful. Please check your email for a verification code."}
+    await auth_service.send_verification_email(provider, user, token)
+    return {"message": "Registration successful. Please check your email to verify your account."}
 
 
 @router.post("/verify-email", status_code=200)
@@ -103,12 +107,14 @@ async def verify_email(
     db: Session = Depends(get_db),
     _rl: None = Depends(auth_rate_limit("verify-email")),
 ) -> dict:
-    user = auth_service.get_user_by_email(db, str(body.email))
-    if not user:
-        # Consistent response regardless of whether email exists
-        return {"message": "If that code is valid, your email has been verified."}
-    auth_service.verify_email_code(db, user.id, body.code)
-    db.commit()
+    # The token uniquely identifies the user — no email required.
+    # Consistent response prevents enumeration of valid vs invalid tokens.
+    try:
+        auth_service.verify_email_token(db, body.token)
+        db.commit()
+    except HTTPException:
+        # Return a consistent response to prevent token enumeration
+        return {"message": "If that link is valid, your email has been verified."}
     return {"message": "Email verified successfully. You can now sign in."}
 
 
@@ -122,10 +128,10 @@ async def resend_verification(
     user = auth_service.get_user_by_email(db, str(body.email))
     # Always return the same response to prevent email enumeration
     if user and not user.email_verified:
-        code = auth_service.create_email_verification_token(db, user.id)
+        token = auth_service.create_email_verification_token(db, user.id)
         db.commit()
-        await auth_service.send_verification_email(provider, user, code)
-    return {"message": "If an unverified account exists for that email, a new code has been sent."}
+        await auth_service.send_verification_email(provider, user, token)
+    return {"message": "If an unverified account exists for that email, a new link has been sent."}
 
 
 @router.post("/login", status_code=200)
@@ -135,13 +141,14 @@ async def login(
     response: Response,
     db: Session = Depends(get_db),
     _rl: None = Depends(auth_rate_limit("login")),
-) -> TokenResponse:
+) -> dict:
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent")
     tokens = auth_service.login(db, str(body.email), body.password, ip, user_agent)
     db.commit()
     set_auth_cookies(response, tokens.access_token, tokens.refresh_token_hex, tokens.csrf_value)
-    return TokenResponse(access_token=tokens.access_token)
+    # Access token is set in HttpOnly cookie only — not returned in JSON.
+    return {"message": "Signed in successfully."}
 
 
 @router.post("/refresh", status_code=200)
@@ -151,7 +158,8 @@ async def refresh(
     db: Session = Depends(get_db),
     es_refresh: str | None = Cookie(None),
     _rl: None = Depends(auth_rate_limit("refresh")),
-) -> TokenResponse:
+    _csrf: None = Depends(require_csrf),
+) -> dict:
     if not es_refresh:
         raise HTTPException(
             status_code=401,
@@ -161,9 +169,9 @@ async def refresh(
     user_agent = request.headers.get("user-agent")
     tokens = auth_service.refresh_session(db, es_refresh, ip, user_agent)
     db.commit()
-    # Set new access and csrf cookies; refresh cookie also rotated
     set_auth_cookies(response, tokens.access_token, tokens.refresh_token_hex, tokens.csrf_value)
-    return TokenResponse(access_token=tokens.access_token)
+    # Access token is set in HttpOnly cookie only — not returned in JSON.
+    return {"message": "Session refreshed."}
 
 
 @router.post("/logout", status_code=200)
@@ -238,15 +246,16 @@ async def switch_org(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
-) -> TokenResponse:
+) -> dict:
     tokens = auth_service.switch_org(db, current_user.user_id, current_user.session_id, body.org_id)
     db.commit()
-    # Only update access and csrf cookies; refresh token is unchanged
+    # Update access and csrf cookies; refresh token is unchanged on org switch.
     from app.auth.cookies import _set_access_cookie, _set_csrf_cookie
 
     _set_access_cookie(response, tokens.access_token)
     _set_csrf_cookie(response, tokens.csrf_value)
-    return TokenResponse(access_token=tokens.access_token)
+    # Access token is set in HttpOnly cookie only — not returned in JSON.
+    return {"message": "Workspace switched."}
 
 
 @router.get("/sessions", status_code=200)

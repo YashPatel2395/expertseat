@@ -25,13 +25,15 @@ The JWT contains `org`, `mid` (membership_id), and `role` claims. Workspace endp
 
 ## Decision
 
-Use **Option C — Org context embedded in JWT access token claims**.
+Use **Option C — Org context embedded in JWT access token claims**, with **DB-backed authorization** on every request to ensure revoked sessions, disabled users, and changed memberships take effect immediately.
 
 The JWT access token payload includes:
 ```json
 {
-  "org":  "<org_id>",
-  "mid":  "<membership_id>",
+  "sub": "<user_id>",
+  "sid": "<session_id>",
+  "org": "<org_id>",
+  "mid": "<membership_id>",
   "role": "admin|recruiter|reviewer"
 }
 ```
@@ -43,16 +45,26 @@ These values are set at login time (user selects or is assigned the default org)
 ```
 Route handler
   └── require_role("admin")              ← raises 403 if role insufficient
-        └── get_workspace_context()      ← extracts org_id, mid, role from JWT
-              └── get_current_user()     ← validates JWT signature and expiry
-                    └── oauth2_scheme()  ← reads es_access cookie
+        └── get_workspace_context()      ← extracts org_id, mid, role from CurrentUser
+              └── get_current_user()     ← validates JWT + performs full DB authorization
+                    └── es_access cookie ← decoded and validated first
 ```
 
-All workspace-scoped DB queries in the service layer receive `org_id` from `get_workspace_context()`. They never read org_id from request body, path parameters, or query strings as the *authorization context*.
+`get_current_user()` performs the following DB lookups on every authenticated request:
+1. Decode and verify JWT signature + expiry
+2. Load `AuthSession` by `session_id` → verify `revoked_at IS NULL`, `expires_at > now()`, `user_id` matches
+3. Load `User` → verify `is_active = True`, `email_verified = True`
+4. If `org_id` present: load `Membership` → verify `is_active = True`, `user_id` and `org_id` match
+5. Load `Organization` → verify `is_active = True`
+6. Derive `role` from DB `Membership.role` — never from the JWT `role` claim
+
+The JWT `org`, `mid`, and `role` claims serve as **routing identifiers** to perform the DB lookups efficiently. The DB is the **authority**; the JWT merely identifies which rows to load.
+
+All workspace-scoped DB queries in the service layer receive `org_id` from the DB-validated `CurrentUser`. They never read org_id from request body, path parameters, or query strings as the *authorization context*.
 
 ### Why not Option A
 
-Option A requires a DB round-trip on every request to validate membership. It also trusts the client to send the correct org ID, which means the server must always validate it. Embedding in the JWT achieves the same result with no DB round-trip: the JWT signature guarantees the claims were set by the server.
+Option A requires the client to send the correct org ID, which the server must always validate anyway. Embedding in the JWT provides the same routing information without trusting the client, and the subsequent DB lookup provides the same validation. Embedding in the JWT is strictly better: we can validate identity (JWT sig) and authority (DB lookup) with a single known key.
 
 ### Workspace switching
 
@@ -68,10 +80,11 @@ Option A requires a DB round-trip on every request to validate membership. It al
 
 ## Consequences
 
-- No DB round-trip for authorization on workspace endpoints (only the JWT validation, which is pure computation)
-- Role changes take effect at the next token refresh (up to 10 minutes delay)
-- If an admin is demoted, they retain their old role in their current JWT for up to 10 minutes
-- Acceptable trade-off: 10-minute window is short; for immediate revocation, the demoting admin can also invalidate the demoted user's sessions
+- One DB round-trip per authenticated request (session + user + optional membership + optional org): typically 2–4 simple PK lookups, each indexed
+- Role changes, membership deactivations, and session revocations take effect on the **next request** (no JWT expiry delay)
+- Revoked sessions are immediately rejected even if the JWT has not yet expired
+- Disabled users are immediately rejected
+- Demoted admins lose their role on the next request after the membership row is updated
 
 ---
 

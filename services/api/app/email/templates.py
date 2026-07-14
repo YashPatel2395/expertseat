@@ -11,15 +11,16 @@ _FRONTEND_BASE = (
 )
 
 
-def email_verification(full_name: str, code: str) -> tuple[str, str]:
+def email_verification(full_name: str, token: str) -> tuple[str, str]:
+    link = f"{_FRONTEND_BASE}/verify-email?token={token}"
     html = f"""
 <!DOCTYPE html>
 <html>
 <body>
 <p>Hi {full_name},</p>
-<p>Your ExpertSeat verification code is:</p>
-<h2 style="letter-spacing: 4px;">{code}</h2>
-<p>This code expires in 24 hours.</p>
+<p>Please verify your ExpertSeat account by clicking the link below:</p>
+<p><a href="{link}">Verify your email address</a></p>
+<p>This link expires in 24 hours and can only be used once.</p>
 <p>If you did not create an account, you can ignore this email.</p>
 </body>
 </html>
@@ -27,8 +28,9 @@ def email_verification(full_name: str, code: str) -> tuple[str, str]:
 
     text = (
         f"Hi {full_name},\n\n"
-        f"Your ExpertSeat verification code is: {code}\n\n"
-        f"This code expires in 24 hours.\n\n"
+        f"Please verify your ExpertSeat account:\n\n"
+        f"{link}\n\n"
+        f"This link expires in 24 hours and can only be used once.\n\n"
         f"If you did not create an account, you can ignore this email."
     )
     return html, text
@@ -43,7 +45,7 @@ def password_reset(full_name: str, reset_token: str) -> tuple[str, str]:
 <p>Hi {full_name},</p>
 <p>We received a request to reset your ExpertSeat password.</p>
 <p><a href="{link}">Reset your password</a></p>
-<p>This link expires in 1 hour and can only be used once.</p>
+<p>This link expires in 30 minutes and can only be used once.</p>
 <p>If you did not request a password reset, you can ignore this email.</p>
 </body>
 </html>
@@ -53,7 +55,7 @@ def password_reset(full_name: str, reset_token: str) -> tuple[str, str]:
         f"Hi {full_name},\n\n"
         f"We received a request to reset your ExpertSeat password.\n\n"
         f"Reset your password: {link}\n\n"
-        f"This link expires in 1 hour and can only be used once.\n\n"
+        f"This link expires in 30 minutes and can only be used once.\n\n"
         f"If you did not request a password reset, you can ignore this email."
     )
     return html, text

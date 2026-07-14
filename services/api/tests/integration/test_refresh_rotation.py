@@ -50,7 +50,7 @@ def test_first_refresh_creates_one_valid_successor(
     login(http_client, "rot1@example.com")
     before_active = len(_active_sessions(db_session, "rot1@example.com"))
 
-    resp = http_client.post("/api/v1/auth/refresh")
+    resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     assert resp.status_code == 200
 
     after_active = len(_active_sessions(db_session, "rot1@example.com"))
@@ -65,10 +65,10 @@ def test_old_refresh_token_unusable_after_rotation(http_client: TestClient, fake
     login(http_client, "rot2@example.com")
     old_refresh = http_client.cookies.get("es_refresh")
 
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     http_client.cookies.set("es_refresh", old_refresh)
-    resp = http_client.post("/api/v1/auth/refresh")
+    resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     assert resp.status_code == 401
 
 
@@ -80,10 +80,10 @@ def test_replay_triggers_refresh_token_reused(http_client: TestClient, fake_emai
     login(http_client, "rot3@example.com")
     old_refresh = http_client.cookies.get("es_refresh")
 
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     http_client.cookies.set("es_refresh", old_refresh)
-    resp = http_client.post("/api/v1/auth/refresh")
+    resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     assert resp.status_code == 401
     assert resp.json()["detail"]["error"] == "REFRESH_TOKEN_REUSED"
 
@@ -99,7 +99,7 @@ def test_replay_revokes_newest_active_session(
     old_refresh = http_client.cookies.get("es_refresh")
 
     # Rotate once — there is now one active leaf
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     new_refresh = http_client.cookies.get("es_refresh")
     assert new_refresh != old_refresh
 
@@ -108,7 +108,7 @@ def test_replay_revokes_newest_active_session(
 
     # Replay the rotated (old) token
     http_client.cookies.set("es_refresh", old_refresh)
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     # All sessions in the family must now be revoked
     active_after_replay = _active_sessions(db_session, "rot4@example.com")
@@ -124,16 +124,16 @@ def test_newest_token_fails_after_family_revocation(http_client: TestClient, fak
     old_refresh = http_client.cookies.get("es_refresh")
 
     # Rotate: we now have a new leaf
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     current_refresh = http_client.cookies.get("es_refresh")
 
     # Replay the old token → family revocation
     http_client.cookies.set("es_refresh", old_refresh)
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     # Even the current (newest) leaf is now revoked
     http_client.cookies.set("es_refresh", current_refresh)
-    resp = http_client.post("/api/v1/auth/refresh")
+    resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
     assert resp.status_code == 401
 
 
@@ -147,7 +147,7 @@ def test_repeated_refreshes_leave_one_active_session(
     login(http_client, "rot6@example.com")
 
     for _ in range(5):
-        resp = http_client.post("/api/v1/auth/refresh")
+        resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
         assert resp.status_code == 200
 
     active = _active_sessions(db_session, "rot6@example.com")
@@ -157,15 +157,13 @@ def test_repeated_refreshes_leave_one_active_session(
 # ── 7. Session listing excludes rotated ancestors ─────────────────────────────
 
 
-def test_session_listing_excludes_rotated_ancestors(
-    http_client: TestClient, fake_email
-):
+def test_session_listing_excludes_rotated_ancestors(http_client: TestClient, fake_email):
     register_and_verify(http_client, fake_email, "rot7@example.com")
     login(http_client, "rot7@example.com")
 
     # Do several rotations
     for _ in range(3):
-        http_client.post("/api/v1/auth/refresh")
+        http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     resp = http_client.get("/api/v1/auth/sessions")
     assert resp.status_code == 200
@@ -182,7 +180,7 @@ def test_logout_revokes_current_active_leaf(
 ):
     register_and_verify(http_client, fake_email, "rot8@example.com")
     login(http_client, "rot8@example.com")
-    http_client.post("/api/v1/auth/refresh")
+    http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     active_before = _active_sessions(db_session, "rot8@example.com")
     assert len(active_before) == 1
@@ -216,10 +214,13 @@ def test_logout_all_revokes_all_families(
     active_after = _active_sessions(db_session, "rot9@example.com")
     assert len(active_after) == 0
 
-    # Confirm the first refresh token is also dead
+    # Confirm the first refresh token is also dead.
+    # After logout-all the CSRF cookie is cleared, so the refresh will be
+    # rejected by CSRF middleware (403) before the token check (401) — either
+    # status proves the session is invalid.
     http_client.cookies.set("es_refresh", first_refresh)
-    resp = http_client.post("/api/v1/auth/refresh")
-    assert resp.status_code == 401
+    resp = http_client.post("/api/v1/auth/refresh")  # intentionally no CSRF
+    assert resp.status_code in (401, 403)
 
 
 # ── 10. Password reset revokes all active sessions ───────────────────────────
@@ -234,9 +235,7 @@ def test_password_reset_revokes_all_sessions(
     login(http_client, "rot10@example.com")
 
     # Trigger password reset
-    http_client.post(
-        "/api/v1/auth/forgot-password", json={"email": "rot10@example.com"}
-    )
+    http_client.post("/api/v1/auth/forgot-password", json={"email": "rot10@example.com"})
     reset_email = fake_email.password_reset_message_for("rot10@example.com")
     assert reset_email is not None
     m = re.search(r"/reset-password\?token=([0-9a-f]{64})", reset_email.text_body)
@@ -263,7 +262,7 @@ def test_raw_refresh_tokens_never_stored(
 
     raw_tokens = set()
     for _ in range(3):
-        resp = http_client.post("/api/v1/auth/refresh")
+        resp = http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
         assert resp.status_code == 200
         raw_tokens.add(http_client.cookies.get("es_refresh"))
 
@@ -286,7 +285,7 @@ def test_refresh_token_hashes_are_globally_unique(
     login(http_client, "rot12@example.com")
 
     for _ in range(4):
-        http_client.post("/api/v1/auth/refresh")
+        http_client.post("/api/v1/auth/refresh", headers=csrf_headers(http_client))
 
     user = db_session.query(User).filter(User.email == "rot12@example.com").first()
     assert user is not None

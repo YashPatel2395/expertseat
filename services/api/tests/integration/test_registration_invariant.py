@@ -135,9 +135,7 @@ def test_verified_user_logs_in_with_org_context(http_client: TestClient, fake_em
 def test_default_workspace_name_derived_from_full_name(
     http_client: TestClient, fake_email, db_session: SASession
 ):
-    register_and_verify(
-        http_client, fake_email, "named@example.com", full_name="Alice Wonderland"
-    )
+    register_and_verify(http_client, fake_email, "named@example.com", full_name="Alice Wonderland")
     user = db_session.query(User).filter(User.email == "named@example.com").first()
     assert user is not None
     membership = db_session.query(Membership).filter(Membership.user_id == user.id).first()
@@ -152,8 +150,10 @@ def test_default_workspace_name_derived_from_full_name(
 
 def test_jwt_after_login_carries_workspace_claims(http_client: TestClient, fake_email):
     register_and_verify(http_client, fake_email, "jwt@example.com")
-    token_resp = login(http_client, "jwt@example.com")
-    assert token_resp["access_token"]
+    login(http_client, "jwt@example.com")
+
+    # Access token delivered via HttpOnly cookie only — verify via /me
+    assert http_client.cookies.get("es_access"), "es_access cookie must be set after login"
 
     me = http_client.get("/api/v1/auth/me")
     assert me.status_code == 200
@@ -191,17 +191,11 @@ def test_slug_collision_resolved_cleanly(
     http_client: TestClient, fake_email, db_session: SASession
 ):
     # Both users have the same full_name → same base slug → collision handling
-    register_and_verify(
-        http_client, fake_email, "slug1@example.com", full_name="Common Name"
-    )
-    register_and_verify(
-        http_client, fake_email, "slug2@example.com", full_name="Common Name"
-    )
+    register_and_verify(http_client, fake_email, "slug1@example.com", full_name="Common Name")
+    register_and_verify(http_client, fake_email, "slug2@example.com", full_name="Common Name")
 
     orgs = (
-        db_session.query(Organization)
-        .filter(Organization.name == "Common Name's Workspace")
-        .all()
+        db_session.query(Organization).filter(Organization.name == "Common Name's Workspace").all()
     )
     assert len(orgs) == 2, "Both orgs must exist"
     slugs = {o.slug for o in orgs}

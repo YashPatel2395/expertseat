@@ -3,6 +3,15 @@
 All auth business logic lives here. Route handlers are thin — they validate
 input, call service functions, and set cookies. Service functions raise
 HTTPException for all error conditions.
+
+Security invariants:
+  - Verification tokens: 32 random bytes (256-bit entropy), SHA-256 hash stored.
+    Resending invalidates all previous unused tokens for that user.
+  - Password reset tokens: 32 random bytes, SHA-256 hash stored, 30-minute TTL.
+    A new request invalidates all previous unused reset tokens.
+  - Refresh tokens: 32 random bytes, new session row on rotation (old row
+    preserved for replay detection).
+  - Access tokens: JWT, never returned in JSON — set only in HttpOnly cookie.
 """
 
 from __future__ import annotations
@@ -20,7 +29,6 @@ from app.auth.crypto import (
     hash_password,
     needs_rehash,
     sha256_hex,
-    sha256_of_string,
     verify_password,
 )
 from app.auth.tokens import create_access_token
@@ -58,43 +66,68 @@ def register_user(db: Session, email: str, password: str, full_name: str) -> Use
 
 
 def create_email_verification_token(db: Session, user_id: str) -> str:
-    """Generate a 6-digit verification code, store its hash, return plaintext code."""
-    import random
+    """Generate a secure verification token, store its hash, return hex token.
 
-    code = f"{random.randint(0, 999999):06d}"
-    code_hash = sha256_of_string(code)
+    Uses 32 cryptographically random bytes (256-bit entropy).
+    All previous unused verification tokens for this user are invalidated
+    (marked used) before creating the new one, so resend always supersedes.
+    """
+    # Invalidate all previous unused tokens for this user
+    now = datetime.now(tz=UTC)
+    db.query(EmailVerificationToken).filter(
+        EmailVerificationToken.user_id == user_id,
+        EmailVerificationToken.used_at.is_(None),
+        EmailVerificationToken.expires_at > now,
+    ).update({"used_at": now})
+
+    token_bytes = generate_token_bytes(32)
+    token_hex = token_bytes.hex()
+    token_hash = sha256_hex(token_bytes)
     token = EmailVerificationToken(
         user_id=user_id,
-        code_hash=code_hash,
-        expires_at=datetime.now(tz=UTC) + timedelta(hours=24),
+        code_hash=token_hash,
+        expires_at=now + timedelta(hours=24),
     )
     db.add(token)
-    return code
+    return token_hex
 
 
-def verify_email_code(db: Session, user_id: str, code: str) -> None:
-    """Mark user email as verified. Raises 401 if code is invalid or expired."""
-    code_hash = sha256_of_string(code)
-    token = (
+def verify_email_token(db: Session, token_hex: str) -> None:
+    """Mark user email as verified. Raises 401 if token is invalid or expired.
+
+    Accepts a 64-character hex token (32 random bytes). Computes SHA-256
+    and looks up the matching unused, unexpired record.
+    """
+    try:
+        token_bytes = bytes.fromhex(token_hex)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_VERIFICATION_TOKEN",
+                "message": "Invalid verification link",
+            },
+        )
+    token_hash = sha256_hex(token_bytes)
+    record = (
         db.query(EmailVerificationToken)
         .filter(
-            EmailVerificationToken.user_id == user_id,
-            EmailVerificationToken.code_hash == code_hash,
+            EmailVerificationToken.code_hash == token_hash,
             EmailVerificationToken.used_at.is_(None),
             EmailVerificationToken.expires_at > datetime.now(tz=UTC),
         )
         .first()
     )
-    if not token:
+    if not record:
         raise HTTPException(
             status_code=401,
             detail={
-                "error": "INVALID_VERIFICATION_CODE",
-                "message": "Invalid or expired verification code",
+                "error": "INVALID_VERIFICATION_TOKEN",
+                "message": "Invalid or expired verification link",
             },
         )
-    token.used_at = datetime.now(tz=UTC)
-    user = db.query(User).filter(User.id == user_id).first()
+    record.used_at = datetime.now(tz=UTC)
+    user = db.query(User).filter(User.id == record.user_id).first()
     if user:
         user.email_verified = True
 
@@ -107,7 +140,7 @@ def get_user_by_email(db: Session, email: str) -> User | None:
 
 
 class AuthTokens:
-    """Holds the tokens needed to set auth cookies and return the access token."""
+    """Holds the tokens needed to set auth cookies."""
 
     def __init__(
         self,
@@ -167,8 +200,6 @@ def login(
     )
 
     if not membership:
-        # User has no org yet — tokens will have placeholder org context.
-        # The frontend redirects to org creation.
         org_id = ""
         membership_id = ""
         role = ""
@@ -242,27 +273,52 @@ def refresh_session(
 ) -> AuthTokens:
     """Rotate refresh token and issue new access token.
 
-    Implements family-based replay detection:
-    - If token hash matches an active session → rotate
-    - If token hash matches a REVOKED session → full family revocation + 401
-    - If token not found → 401
+    Implements family-based replay detection with SELECT FOR UPDATE to prevent
+    two concurrent requests from both succeeding on the same token:
+
+    - Token hash matches an active session → acquire row lock, re-check,
+      revoke old row, create new row in same family.
+    - Token hash matches a REVOKED session → lock family rows, revoke all
+      active family members, raise REFRESH_TOKEN_REUSED.
+    - Token not found at all → INVALID_REFRESH_TOKEN.
+
+    The row lock ensures exactly one of two concurrent refreshes succeeds;
+    the loser sees revoked_at set and triggers family revocation.
     """
-    token_bytes = bytes.fromhex(refresh_token_hex_val)
+    try:
+        token_bytes = bytes.fromhex(refresh_token_hex_val)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_REFRESH_TOKEN",
+                "message": "Invalid or expired refresh token",
+            },
+        )
     token_hash = sha256_hex(token_bytes)
 
-    # Check for revoked session (replay detection)
-    revoked = (
+    # Look up the session row by hash (may be active or already revoked)
+    candidate = (
         db.query(AuthSession)
-        .filter(
-            AuthSession.refresh_token_hash == token_hash,
-            AuthSession.revoked_at.isnot(None),
-        )
+        .filter(AuthSession.refresh_token_hash == token_hash)
+        .with_for_update()
         .first()
     )
-    if revoked:
-        # Revoke entire family
+
+    if candidate is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_REFRESH_TOKEN",
+                "message": "Invalid or expired refresh token",
+            },
+        )
+
+    # Re-check state after acquiring the lock
+    if candidate.revoked_at is not None:
+        # Replay detected — revoke entire family
         db.query(AuthSession).filter(
-            AuthSession.family_id == revoked.family_id,
+            AuthSession.family_id == candidate.family_id,
             AuthSession.revoked_at.is_(None),
         ).update({"revoked_at": datetime.now(tz=UTC)})
         raise HTTPException(
@@ -273,16 +329,7 @@ def refresh_session(
             },
         )
 
-    session = (
-        db.query(AuthSession)
-        .filter(
-            AuthSession.refresh_token_hash == token_hash,
-            AuthSession.revoked_at.is_(None),
-            AuthSession.expires_at > datetime.now(tz=UTC),
-        )
-        .first()
-    )
-    if not session:
+    if candidate.expires_at <= datetime.now(tz=UTC):
         raise HTTPException(
             status_code=401,
             detail={
@@ -291,9 +338,10 @@ def refresh_session(
             },
         )
 
-    # Rotate: revoke old session, create new session in the same family.
-    # Keeping the old row with its original token hash allows replay detection —
-    # if someone presents the now-revoked token, we find it and can kill the family.
+    session = candidate
+
+    # Rotate: revoke old session row (preserving hash for future replay detection),
+    # then insert a new row in the same family.
     new_bytes = generate_token_bytes(32)
     new_hex = new_bytes.hex()
     new_hash = sha256_hex(new_bytes)
@@ -302,18 +350,19 @@ def refresh_session(
     new_csrf = generate_token_hex(32)
     new_ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()
 
-    # Mark old session as revoked (its token hash is preserved for replay detection)
     session.revoked_at = datetime.now(tz=UTC)
 
-    # Inherit org context and membership from the old session
+    # Derive current role from DB (do not trust JWT role claim)
     membership = db.query(Membership).filter(Membership.id == session.membership_id).first()
-    role = membership.role if membership else ""
+    role = membership.role if membership and membership.is_active else ""
+    org_id = session.org_id if membership and membership.is_active else None
+    membership_id = session.membership_id if membership and membership.is_active else None
 
     new_session = AuthSession(
         id=new_session_id,
         user_id=session.user_id,
-        org_id=session.org_id,
-        membership_id=session.membership_id,
+        org_id=org_id,
+        membership_id=membership_id,
         refresh_token_hash=new_hash,
         family_id=session.family_id,
         ip_address_hash=new_ip_hash,
@@ -325,8 +374,8 @@ def refresh_session(
     access_token = create_access_token(
         user_id=session.user_id,
         session_id=new_session_id,
-        org_id=session.org_id or "",
-        membership_id=session.membership_id or "",
+        org_id=org_id or "",
+        membership_id=membership_id or "",
         role=role,
         jti=new_jti,
     )
@@ -405,22 +454,47 @@ def revoke_session(db: Session, user_id: str, session_id: str) -> None:
 
 
 def create_password_reset_token(db: Session, user_id: str) -> str:
-    """Generate a password reset token, store its hash, return hex token."""
+    """Generate a password reset token, invalidate prior tokens, return hex token.
+
+    Uses 32 cryptographically random bytes (256-bit entropy). Expiry is
+    settings.password_reset_ttl (default 30 minutes). All unused prior reset
+    tokens for this user are invalidated on each new request.
+    """
+    now = datetime.now(tz=UTC)
+    # Invalidate all previous unused reset tokens for this user
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user_id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > now,
+    ).update({"used_at": now})
+
     token_bytes = generate_token_bytes(32)
     token_hex = token_bytes.hex()
     token_hash = sha256_hex(token_bytes)
     reset_token = PasswordResetToken(
         user_id=user_id,
         token_hash=token_hash,
-        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+        expires_at=now + timedelta(seconds=settings.password_reset_ttl),
     )
     db.add(reset_token)
     return token_hex
 
 
 def reset_password(db: Session, token_hex: str, new_password: str) -> None:
-    """Reset password using a valid reset token. Raises 401 if invalid."""
-    token_bytes = bytes.fromhex(token_hex)
+    """Reset password using a valid reset token. Raises 401 if invalid.
+
+    Also updates password_changed_at and revokes all active sessions.
+    """
+    try:
+        token_bytes = bytes.fromhex(token_hex)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_RESET_TOKEN",
+                "message": "Invalid or expired password reset link",
+            },
+        )
     token_hash = sha256_hex(token_bytes)
     reset_token = (
         db.query(PasswordResetToken)
@@ -443,7 +517,8 @@ def reset_password(db: Session, token_hex: str, new_password: str) -> None:
     user = db.query(User).filter(User.id == reset_token.user_id).first()
     if user:
         user.hashed_password = hash_password(new_password)
-    # Revoke all sessions after password reset
+        user.password_changed_at = datetime.now(tz=UTC)
+    # Revoke all sessions after password reset (DB-backed auth will reject them)
     db.query(AuthSession).filter(
         AuthSession.user_id == reset_token.user_id,
         AuthSession.revoked_at.is_(None),
@@ -459,6 +534,7 @@ def change_password(db: Session, user_id: str, current_password: str, new_passwo
             detail={"error": "INVALID_CREDENTIALS", "message": "Current password is incorrect"},
         )
     user.hashed_password = hash_password(new_password)
+    user.password_changed_at = datetime.now(tz=UTC)
 
 
 # ── Org switching ─────────────────────────────────────────────────────────────
@@ -533,9 +609,9 @@ def switch_org(
 async def send_verification_email(
     provider: EmailProvider,
     user: User,
-    code: str,
+    token: str,
 ) -> None:
-    html, text = email_verification(user.full_name, code)
+    html, text = email_verification(user.full_name, token)
     await provider.send(
         to=user.email,
         subject="Verify your ExpertSeat account",

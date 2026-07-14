@@ -18,7 +18,8 @@ def test_valid_credentials_set_cookies(http_client: TestClient, fake_email):
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["access_token"]
+    # Access token is delivered only via HttpOnly cookie, never in JSON
+    assert "access_token" not in resp.json()
     assert "es_access" in http_client.cookies
     assert "es_refresh" in http_client.cookies
     assert "es_csrf" in http_client.cookies

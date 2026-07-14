@@ -118,7 +118,9 @@ async def update_member_role(
     _csrf: None = Depends(require_csrf),
 ) -> dict:
     check_can_manage_member(ctx.role, body.role)
-    return ws.update_member_role(db, ctx.org_id, user_id, body.role, ctx.user_id)
+    result = ws.update_member_role(db, ctx.org_id, user_id, body.role, ctx.user_id)
+    db.commit()
+    return result
 
 
 @router.delete("/members/{user_id}", status_code=200)
@@ -143,7 +145,9 @@ async def set_member_status(
     _role: None = Depends(require_role("admin")),
     _csrf: None = Depends(require_csrf),
 ) -> dict:
-    return ws.set_member_active(db, ctx.org_id, user_id, body.is_active, ctx.user_id)
+    result = ws.set_member_active(db, ctx.org_id, user_id, body.is_active, ctx.user_id)
+    db.commit()
+    return result
 
 
 # ── Invitation endpoints ──────────────────────────────────────────────────────
@@ -202,6 +206,7 @@ async def accept_invitation(
     body: AcceptInvitationRequest,
     db: Session = Depends(get_db),
     current_user: WorkspaceContext = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf),
 ) -> dict:
     org, membership = ws.accept_invitation(db, body.token, current_user.user_id)
     db.commit()

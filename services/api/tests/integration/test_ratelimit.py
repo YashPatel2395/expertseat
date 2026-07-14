@@ -115,17 +115,21 @@ def test_redis_unavailable_returns_503(http_client: TestClient, fake_email):
     assert resp.json()["detail"]["error"] == "SERVICE_UNAVAILABLE"
 
 
-# ── 7. Rate limit key is IP-hashed, not raw IP ────────────────────────────────
+# ── 7. Rate limit key uses HMAC, not raw IP ───────────────────────────────────
 
 
-def test_rate_limit_key_contains_hashed_ip_not_raw():
-    import hashlib
-
-    from app.auth.ratelimit import _ip_hash
+def test_rate_limit_key_contains_hmac_not_raw_ip():
+    from app.auth.ratelimit import _ip_hmac
 
     raw_ip = "192.168.1.100"
-    hashed = _ip_hash(raw_ip)
+    result = _ip_hmac(raw_ip)
 
-    assert raw_ip not in hashed
-    assert hashed == hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
-    assert len(hashed) == 16
+    # Raw IP must not appear in the key
+    assert raw_ip not in result
+    # Result is a 32-char hex prefix (128 bits of HMAC-SHA256)
+    assert len(result) == 32
+    assert all(c in "0123456789abcdef" for c in result)
+    # Function must be deterministic
+    assert _ip_hmac(raw_ip) == result
+    # Different IPs must produce different keys
+    assert _ip_hmac("10.0.0.1") != result

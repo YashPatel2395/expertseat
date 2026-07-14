@@ -37,9 +37,7 @@ _USER_B = "dbfixture_b@example.com"
 # ── 1 & 2: writes from one test are invisible in the next ─────────────────────
 
 
-def test_db_fixture_part1_creates_user(
-    http_client: TestClient, fake_email, db_session: SASession
-):
+def test_db_fixture_part1_creates_user(http_client: TestClient, fake_email, db_session: SASession):
     """Create a user and confirm it exists within this test's scope."""
     register_and_verify(http_client, fake_email, _USER_A)
     user = db_session.query(User).filter(User.email == _USER_A).first()
@@ -50,8 +48,7 @@ def test_db_fixture_part2_user_from_part1_is_gone(db_session: SASession):
     """User created in the previous test must not exist (outer TX was rolled back)."""
     user = db_session.query(User).filter(User.email == _USER_A).first()
     assert user is None, (
-        "User from a previous test was visible — "
-        "savepoint fixture is not rolling back correctly"
+        "User from a previous test was visible — savepoint fixture is not rolling back correctly"
     )
 
 
@@ -96,9 +93,7 @@ def test_multiple_route_commits_are_gone_in_next_test(db_session: SASession):
 # ── 5: org created in test is gone in the next test ──────────────────────────
 
 
-def test_org_created_in_test_rolls_back(
-    http_client: TestClient, fake_email, db_session: SASession
-):
+def test_org_created_in_test_rolls_back(http_client: TestClient, fake_email, db_session: SASession):
     from app.models.organization import Organization
 
     register_and_verify(http_client, fake_email, "orgrollback@example.com")

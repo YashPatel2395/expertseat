@@ -239,27 +239,25 @@ def remove_member(db: Session, org_id: str, target_user_id: str, actor_id: str) 
 
 
 def _check_not_last_admin(db: Session, org_id: str, target_user_id: str) -> None:
-    """Raise 409 if the target is the only active admin in the org."""
-    admin_count = (
+    """Raise 409 if the target is the only active admin in the org.
+
+    Uses SELECT FOR UPDATE to lock all active admin memberships for this org,
+    preventing concurrent demotions or removals from racing and leaving zero admins.
+    The lock is held until the caller's transaction commits or rolls back.
+    """
+    admin_memberships = (
         db.query(Membership)
         .filter(
             Membership.org_id == org_id,
             Membership.role == "admin",
             Membership.is_active.is_(True),
         )
-        .count()
+        .with_for_update()
+        .all()
     )
-    target_membership = (
-        db.query(Membership)
-        .filter(
-            Membership.org_id == org_id,
-            Membership.user_id == target_user_id,
-            Membership.role == "admin",
-            Membership.is_active.is_(True),
-        )
-        .first()
-    )
-    if admin_count == 1 and target_membership:
+    admin_count = len(admin_memberships)
+    target_is_admin = any(m.user_id == target_user_id for m in admin_memberships)
+    if admin_count == 1 and target_is_admin:
         raise HTTPException(
             status_code=409,
             detail={
@@ -275,7 +273,13 @@ def _check_not_last_admin(db: Session, org_id: str, target_user_id: str) -> None
 def create_invitation(
     db: Session, org_id: str, email: str, role: str, invited_by: str
 ) -> OrganizationInvitation:
-    """Create an invitation. Raises 409 if a pending invitation exists for this email."""
+    """Create an invitation.
+
+    Raises:
+      409 ALREADY_A_MEMBER           — email belongs to an active member
+      409 INVITATION_ALREADY_PENDING — a valid pending invitation exists
+      400 INVALID_ROLE               — role not in allowed set
+    """
     if role not in ("admin", "recruiter", "reviewer"):
         raise HTTPException(
             status_code=400,
@@ -284,6 +288,27 @@ def create_invitation(
                 "message": "Role must be admin, recruiter, or reviewer",
             },
         )
+
+    # Check if the email belongs to an existing active member
+    existing_member = (
+        db.query(Membership, User)
+        .join(User, Membership.user_id == User.id)
+        .filter(
+            Membership.org_id == org_id,
+            Membership.is_active.is_(True),
+            User.email == email.lower(),
+        )
+        .first()
+    )
+    if existing_member:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "ALREADY_A_MEMBER",
+                "message": "This email address is already an active member of the organization",
+            },
+        )
+
     # Check for existing active invitation
     existing = (
         db.query(OrganizationInvitation)
@@ -486,20 +511,22 @@ def _write_audit(
     event_type: str,
     payload: dict,
 ) -> None:
-    """Append an audit event. Never raises — audit failures are logged, not surfaced."""
-    try:
-        event = AuditEvent(
-            org_id=org_id,
-            actor_id=actor_id,
-            target_id=target_id,
-            event_type=event_type,
-            payload=payload,
-        )
-        db.add(event)
-    except Exception:
-        import structlog
+    """Append an audit event in the same transaction as the business mutation.
 
-        structlog.get_logger().error("Failed to write audit event", event_type=event_type)
+    Audit events are not optional — they commit atomically with the mutation that
+    caused them. If the audit INSERT fails, the business mutation rolls back too.
+    This is the same-transaction audit model: audit failure = business failure.
+
+    Sensitive values (passwords, tokens) must never appear in payload.
+    """
+    event = AuditEvent(
+        org_id=org_id,
+        actor_id=actor_id,
+        target_id=target_id,
+        event_type=event_type,
+        payload=payload,
+    )
+    db.add(event)
 
 
 # ── Email helpers ──────────────────────────────────────────────────────────────

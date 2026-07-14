@@ -40,7 +40,7 @@ The refresh cookie path is restricted to `/api/v1/auth` so the refresh token is 
 
 The CSRF cookie is intentionally non-HttpOnly so that the frontend JavaScript can read it and include it in the `X-CSRF-Token` request header. The backend validates that the header value matches the cookie value (double-submit pattern). Because the cookie is SameSite=Lax, a cross-site attacker cannot read the cookie via JavaScript or set the correct header.
 
-Access tokens are also returned in the JSON body on login and refresh (`{"access_token": "..."}`) to support programmatic clients (CLI tools, testing). Browser clients use the cookie.
+Access tokens are delivered **only** via the `es_access` HttpOnly cookie. They are never returned in the JSON response body. This applies to login, refresh, and switch-org. Programmatic clients (CLI tools, testing) must read the cookie.
 
 ---
 

@@ -185,18 +185,24 @@ def register_and_verify(
 
     sent = fake_email.verification_message_for(email)
     assert sent is not None, f"No verification email found for {email}"
-    match = re.search(r"\b(\d{6})\b", sent.text_body)
-    assert match, f"No 6-digit code in verification email: {sent.text_body}"
-    code = match.group(1)
+    # Verification emails contain a 64-char hex token in a URL path
+    match = re.search(r"/verify-email\?token=([0-9a-f]{64})", sent.text_body)
+    assert match, f"No verification token in email body: {sent.text_body}"
+    token = match.group(1)
 
-    resp = client.post("/api/v1/auth/verify-email", json={"email": email, "code": code})
+    resp = client.post("/api/v1/auth/verify-email", json={"token": token})
     assert resp.status_code == 200, resp.text
 
     return {"email": email, "password": password, "full_name": full_name}
 
 
 def login(client: TestClient, email: str, password: str = "Password123!") -> dict:
-    """Log in and return the token response body. Cookies are set on client."""
+    """Log in, assert success, and return the JSON body. Cookies are set on client.
+
+    Access tokens are no longer returned in JSON — they are set only in the
+    HttpOnly es_access cookie. Use client.cookies.get("es_access") to check
+    that the cookie was set, and GET /auth/me for decoded claim values.
+    """
     resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.text
     return resp.json()

@@ -1,15 +1,17 @@
 """Redis-backed fixed-window rate limiting for auth endpoints.
 
 Algorithm:
-  1. Hash the client IP (SHA-256, truncated to 16 hex chars) to avoid
-     storing IP addresses in Redis.
+  1. Derive a pseudonymous identifier for the client IP using HMAC-SHA256
+     with a dedicated rate-limit secret (separate from the JWT signing secret).
+     This prevents offline enumeration of IP → key mappings even if Redis
+     is compromised.
   2. INCR the counter key. On first increment, set TTL = window_seconds.
-  3. If count > max_requests: return False (rate limited).
+  3. If count > max_requests: return 429 with Retry-After = actual remaining TTL.
   4. Fail-closed: if Redis is unreachable on an auth endpoint, reject
      the request with 503 rather than allowing unlimited attempts.
 
 Key format:
-  rate:{endpoint_group}:{ip_hash_prefix}
+  rate:{endpoint_group}:{hmac_prefix}
 
 This is a FastAPI dependency factory. Usage:
   @router.post("/auth/login")
@@ -17,6 +19,7 @@ This is a FastAPI dependency factory. Usage:
 """
 
 import hashlib
+import hmac as hmac_lib
 
 import redis as redis_lib
 import structlog
@@ -27,13 +30,15 @@ from app.config import settings
 logger = structlog.get_logger()
 
 
-def _ip_hash(ip: str) -> str:
-    """One-way hash of an IP address for use as a rate limit key component.
+def _ip_hmac(ip: str) -> str:
+    """Keyed pseudonym for an IP address using HMAC-SHA256.
 
-    We store only the first 16 hex chars (64-bit prefix) — enough to be
-    unique per IP in practice while not storing the full address.
+    Uses `settings.rate_limit_secret` (falling back to `settings.secret_key`)
+    as the key. The first 32 hex chars (128 bits) are sufficient for unique
+    key-space partitioning in a fixed-window counter.
     """
-    return hashlib.sha256(ip.encode()).hexdigest()[:16]
+    secret = settings.rate_limit_secret or settings.secret_key
+    return hmac_lib.new(secret.encode(), ip.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def auth_rate_limit(endpoint_group: str):
@@ -49,8 +54,8 @@ def auth_rate_limit(endpoint_group: str):
 
     async def _check(request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"
-        ip_prefix = _ip_hash(client_ip)
-        key = f"rate:{endpoint_group}:{ip_prefix}"
+        ip_key = _ip_hmac(client_ip)
+        key = f"rate:{endpoint_group}:{ip_key}"
 
         try:
             r = redis_lib.from_url(
@@ -64,13 +69,15 @@ def auth_rate_limit(endpoint_group: str):
                 if count == 1:
                     r.expire(key, settings.rate_limit_auth_window)
                 if count > settings.rate_limit_auth_max:
+                    ttl = r.ttl(key)
+                    retry_after = str(max(ttl, 1))
                     raise HTTPException(
                         status_code=429,
                         detail={
                             "error": "RATE_LIMITED",
                             "message": "Too many requests. Please try again later.",
                         },
-                        headers={"Retry-After": str(settings.rate_limit_auth_window)},
+                        headers={"Retry-After": retry_after},
                     )
             finally:
                 r.close()

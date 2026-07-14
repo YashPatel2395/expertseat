@@ -158,18 +158,21 @@ tests/
 │   └── test_orm_fk.py         # ORM ForeignKey declaration tests (no DB)
 ├── integration/
 │   ├── conftest.py            # fixtures: db_session, http_client, fake_email, clear_rate_limits
-│   ├── test_auth.py           # core auth flows (register, login, logout, etc.)
 │   ├── test_db_fixture.py     # savepoint isolation regression tests
-│   ├── test_email_verification.py
-│   ├── test_password_reset.py
-│   ├── test_ratelimit.py      # Redis rate-limit tests
-│   ├── test_refresh_rotation.py  # token rotation & replay detection
+│   ├── test_email_verification.py  # 64-char hex token format, resend invalidation
+│   ├── test_login.py          # credential validation, cookie-only token delivery
+│   ├── test_logout.py         # cookie clearing, CSRF enforcement
+│   ├── test_password_reset.py # 30-min TTL, session revocation on reset
+│   ├── test_ratelimit.py      # Redis rate-limit tests, HMAC IP pseudonymization
+│   ├── test_refresh.py        # CSRF enforcement on refresh, replay detection
+│   ├── test_refresh_rotation.py  # token rotation & replay detection invariants
+│   ├── test_registration.py   # registration endpoint behaviour
 │   ├── test_registration_invariant.py  # atomic registration invariants
 │   ├── test_session_context.py   # nullable session org context states
-│   ├── test_tenant_isolation.py
-│   ├── test_workspace.py
-│   ├── test_members.py
-│   └── test_audit.py
+│   ├── test_tenant_isolation.py  # cross-org access prevention
+│   ├── test_workspace.py      # org creation, listing, switching
+│   ├── test_members.py        # RBAC, last-admin protection
+│   └── test_audit.py          # audit log access control
 ├── test_config.py
 ├── test_health.py
 └── test_regression.py
