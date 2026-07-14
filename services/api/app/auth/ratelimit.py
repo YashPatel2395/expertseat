@@ -11,7 +11,7 @@ Algorithm:
      the request with 503 rather than allowing unlimited attempts.
 
 Key format:
-  rate:{endpoint_group}:{hmac_prefix}
+  rate:{app_env}:{endpoint_group}:{hmac_prefix}
 
 This is a FastAPI dependency factory. Usage:
   @router.post("/auth/login")
@@ -33,11 +33,13 @@ logger = structlog.get_logger()
 def _ip_hmac(ip: str) -> str:
     """Keyed pseudonym for an IP address using HMAC-SHA256.
 
-    Uses `settings.rate_limit_secret` (falling back to `settings.secret_key`)
-    as the key. The first 32 hex chars (128 bits) are sufficient for unique
-    key-space partitioning in a fixed-window counter.
+    Uses `settings.rate_limit_secret` as the key, falling back to
+    `settings.secret_key` only in dev/test environments. In production the
+    model validator ensures rate_limit_secret is set, so the fallback is
+    never reached there. The first 32 hex chars (128 bits) are sufficient
+    for unique key-space partitioning in a fixed-window counter.
     """
-    secret = settings.rate_limit_secret or settings.secret_key
+    secret = settings.rate_limit_secret or settings.secret_key  # fallback only in dev/test
     return hmac_lib.new(secret.encode(), ip.encode(), hashlib.sha256).hexdigest()[:32]
 
 
@@ -55,7 +57,7 @@ def auth_rate_limit(endpoint_group: str):
     async def _check(request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"
         ip_key = _ip_hmac(client_ip)
-        key = f"rate:{endpoint_group}:{ip_key}"
+        key = f"rate:{settings.app_env}:{endpoint_group}:{ip_key}"
 
         try:
             r = redis_lib.from_url(

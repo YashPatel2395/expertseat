@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -22,6 +23,9 @@ from app.models.audit import AuditEvent
 from app.models.organization import Membership, Organization, OrganizationInvitation
 from app.models.session import AuthSession
 from app.models.user import User
+
+if TYPE_CHECKING:
+    from app.services.auth import AuthTokens
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$")
 _INVITATION_TTL_DAYS = 7
@@ -51,7 +55,13 @@ def _ensure_unique_slug(db: Session, base_slug: str) -> str:
 # ── Organization creation ──────────────────────────────────────────────────────
 
 
-def create_organization(db: Session, name: str, creator_user_id: str) -> Organization:
+def create_organization(
+    db: Session,
+    name: str,
+    creator_user_id: str,
+    *,
+    request_id: str | None = None,
+) -> Organization:
     """Create a new organization and make the creator an admin."""
     base_slug = _slugify(name)
     if not base_slug:
@@ -73,12 +83,27 @@ def create_organization(db: Session, name: str, creator_user_id: str) -> Organiz
     db.add(membership)
     db.flush()
 
-    _write_audit(db, org.id, creator_user_id, None, "org.created", {"name": name, "slug": slug})
+    _write_audit(
+        db,
+        org.id,
+        creator_user_id,
+        None,
+        "org.created",
+        {"name": name, "slug": slug},
+        target_type="organization",
+        request_id=request_id,
+    )
     return org
 
 
 def update_organization(
-    db: Session, org_id: str, actor_id: str, name: str | None, slug: str | None
+    db: Session,
+    org_id: str,
+    actor_id: str,
+    name: str | None,
+    slug: str | None,
+    *,
+    request_id: str | None = None,
 ) -> Organization:
     """Update organization name and/or slug. Admin only."""
     org = _require_org(db, org_id)
@@ -104,7 +129,16 @@ def update_organization(
                 detail={"error": "SLUG_ALREADY_EXISTS", "message": "That slug is already taken"},
             )
         org.slug = slug
-    _write_audit(db, org_id, actor_id, org_id, "org.settings_updated", {"name": name, "slug": slug})
+    _write_audit(
+        db,
+        org_id,
+        actor_id,
+        org_id,
+        "org.settings_updated",
+        {"name": name, "slug": slug},
+        target_type="organization",
+        request_id=request_id,
+    )
     return org
 
 
@@ -179,7 +213,13 @@ def get_member(db: Session, org_id: str, user_id: str) -> dict:
 
 
 def update_member_role(
-    db: Session, org_id: str, target_user_id: str, new_role: str, actor_id: str
+    db: Session,
+    org_id: str,
+    target_user_id: str,
+    new_role: str,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
 ) -> dict:
     """Change a member's role. Raises 409 if demoting the last admin."""
     if new_role not in ("admin", "recruiter", "reviewer"):
@@ -194,7 +234,7 @@ def update_member_role(
     old_role = membership.role
 
     if old_role == "admin" and new_role != "admin":
-        _check_not_last_admin(db, org_id, target_user_id)
+        _check_not_last_admin(db, org_id, target_user_id, actor_id, request_id=request_id)
 
     membership.role = new_role
     _write_audit(
@@ -204,30 +244,54 @@ def update_member_role(
         target_user_id,
         "member.role_changed",
         {"old_role": old_role, "new_role": new_role},
+        target_type="user",
+        request_id=request_id,
     )
     return get_member(db, org_id, target_user_id)
 
 
 def set_member_active(
-    db: Session, org_id: str, target_user_id: str, is_active: bool, actor_id: str
+    db: Session,
+    org_id: str,
+    target_user_id: str,
+    is_active: bool,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
 ) -> dict:
     """Enable or disable a member. Raises 409 if disabling the last admin."""
     membership = _require_membership(db, org_id, target_user_id)
 
     if not is_active and membership.role == "admin":
-        _check_not_last_admin(db, org_id, target_user_id)
+        _check_not_last_admin(db, org_id, target_user_id, actor_id, request_id=request_id)
 
     membership.is_active = is_active
     action = "member.enabled" if is_active else "member.disabled"
-    _write_audit(db, org_id, actor_id, target_user_id, action, {})
+    _write_audit(
+        db,
+        org_id,
+        actor_id,
+        target_user_id,
+        action,
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
     return get_member(db, org_id, target_user_id)
 
 
-def remove_member(db: Session, org_id: str, target_user_id: str, actor_id: str) -> None:
+def remove_member(
+    db: Session,
+    org_id: str,
+    target_user_id: str,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
+) -> None:
     """Remove a member from the org. Raises 409 if removing the last admin."""
     membership = _require_membership(db, org_id, target_user_id)
     if membership.role == "admin":
-        _check_not_last_admin(db, org_id, target_user_id)
+        _check_not_last_admin(db, org_id, target_user_id, actor_id, request_id=request_id)
     db.delete(membership)
     # Revoke their sessions in this org
     db.query(AuthSession).filter(
@@ -235,15 +299,34 @@ def remove_member(db: Session, org_id: str, target_user_id: str, actor_id: str) 
         AuthSession.org_id == org_id,
         AuthSession.revoked_at.is_(None),
     ).update({"revoked_at": datetime.now(tz=UTC)})
-    _write_audit(db, org_id, actor_id, target_user_id, "member.removed", {})
+    _write_audit(
+        db,
+        org_id,
+        actor_id,
+        target_user_id,
+        "member.removed",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
 
 
-def _check_not_last_admin(db: Session, org_id: str, target_user_id: str) -> None:
+def _check_not_last_admin(
+    db: Session,
+    org_id: str,
+    target_user_id: str,
+    actor_id: str | None = None,
+    *,
+    request_id: str | None = None,
+) -> None:
     """Raise 409 if the target is the only active admin in the org.
 
     Uses SELECT FOR UPDATE to lock all active admin memberships for this org,
     preventing concurrent demotions or removals from racing and leaving zero admins.
     The lock is held until the caller's transaction commits or rolls back.
+
+    If blocking, writes a last_admin.action_blocked audit event in an independent
+    transaction (so it persists even though the caller's transaction rolls back).
     """
     admin_memberships = (
         db.query(Membership)
@@ -258,6 +341,15 @@ def _check_not_last_admin(db: Session, org_id: str, target_user_id: str) -> None
     admin_count = len(admin_memberships)
     target_is_admin = any(m.user_id == target_user_id for m in admin_memberships)
     if admin_count == 1 and target_is_admin:
+        _write_audit_independent(
+            "last_admin.action_blocked",
+            org_id,
+            actor_id,
+            target_user_id,
+            {},
+            target_type="user",
+            request_id=request_id,
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -271,7 +363,13 @@ def _check_not_last_admin(db: Session, org_id: str, target_user_id: str) -> None
 
 
 def create_invitation(
-    db: Session, org_id: str, email: str, role: str, invited_by: str
+    db: Session,
+    org_id: str,
+    email: str,
+    role: str,
+    invited_by: str,
+    *,
+    request_id: str | None = None,
 ) -> OrganizationInvitation:
     """Create an invitation.
 
@@ -342,7 +440,16 @@ def create_invitation(
     )
     db.add(invitation)
     db.flush()
-    _write_audit(db, org_id, invited_by, None, "invitation.created", {"email": email, "role": role})
+    _write_audit(
+        db,
+        org_id,
+        invited_by,
+        invitation.id,
+        "invitation.created",
+        {"email": email, "role": role},
+        target_type="invitation",
+        request_id=request_id,
+    )
     # Return the invitation with the plaintext token set as a transient attribute
     invitation._plaintext_token = token_hex  # type: ignore[attr-defined]
     return invitation
@@ -372,7 +479,14 @@ def list_invitations(db: Session, org_id: str) -> list[dict]:
     ]
 
 
-def revoke_invitation(db: Session, org_id: str, invitation_id: str, actor_id: str) -> None:
+def revoke_invitation(
+    db: Session,
+    org_id: str,
+    invitation_id: str,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
+) -> None:
     inv = (
         db.query(OrganizationInvitation)
         .filter(
@@ -388,10 +502,25 @@ def revoke_invitation(db: Session, org_id: str, invitation_id: str, actor_id: st
             detail={"error": "INVITATION_NOT_FOUND", "message": "Invitation not found"},
         )
     inv.revoked_at = datetime.now(tz=UTC)
-    _write_audit(db, org_id, actor_id, None, "invitation.revoked", {"email": inv.email})
+    _write_audit(
+        db,
+        org_id,
+        actor_id,
+        invitation_id,
+        "invitation.revoked",
+        {"email": inv.email},
+        target_type="invitation",
+        request_id=request_id,
+    )
 
 
-def accept_invitation(db: Session, token_hex: str, user_id: str) -> tuple[Organization, Membership]:
+def accept_invitation(
+    db: Session,
+    token_hex: str,
+    user_id: str,
+    *,
+    request_id: str | None = None,
+) -> tuple[Organization, Membership]:
     """Accept an invitation. User must already have a verified account."""
     token_bytes = bytes.fromhex(token_hex)
     token_hash = sha256_hex(token_bytes)
@@ -444,8 +573,247 @@ def accept_invitation(db: Session, token_hex: str, user_id: str) -> tuple[Organi
     db.add(membership)
     db.flush()
     org = _require_org(db, inv.org_id)
-    _write_audit(db, inv.org_id, user_id, None, "invitation.accepted", {"role": inv.role})
+    _write_audit(
+        db,
+        inv.org_id,
+        user_id,
+        inv.id,
+        "invitation.accepted",
+        {"role": inv.role},
+        target_type="invitation",
+        request_id=request_id,
+    )
     return org, membership
+
+
+def update_invitation_delivery(
+    db: Session,
+    invitation_id: str,
+    status: str,
+    failure_code: str | None = None,
+) -> None:
+    """Record the outcome of an email delivery attempt."""
+    now = datetime.now(tz=UTC)
+    db.query(OrganizationInvitation).filter(OrganizationInvitation.id == invitation_id).update(
+        {
+            "delivery_status": status,
+            "delivery_attempted_at": now,
+            "delivery_failure_code": failure_code,
+        }
+    )
+
+
+def resend_invitation(
+    db: Session,
+    org_id: str,
+    invitation_id: str,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
+) -> OrganizationInvitation:
+    """Resend an invitation, rotating the token. Raises 404 if not found."""
+    inv = (
+        db.query(OrganizationInvitation)
+        .filter(
+            OrganizationInvitation.id == invitation_id,
+            OrganizationInvitation.org_id == org_id,
+            OrganizationInvitation.accepted_at.is_(None),
+            OrganizationInvitation.revoked_at.is_(None),
+            OrganizationInvitation.expires_at > datetime.now(tz=UTC),
+        )
+        .with_for_update()
+        .first()
+    )
+    if not inv:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "INVITATION_NOT_FOUND", "message": "Active invitation not found"},
+        )
+    # Rotate the token (old token is now invalid)
+    token_bytes = generate_token_bytes(32)
+    token_hex = token_bytes.hex()
+    token_hash = sha256_hex(token_bytes)
+    inv.token_hash = token_hash
+    inv.delivery_status = "pending"
+    inv.delivery_attempted_at = None
+    inv.delivery_failure_code = None
+    inv._plaintext_token = token_hex  # type: ignore[attr-defined]
+    _write_audit(
+        db,
+        org_id,
+        actor_id,
+        invitation_id,
+        "invitation.resent",
+        {"email": inv.email},
+        target_type="invitation",
+        request_id=request_id,
+    )
+    return inv
+
+
+def preview_invitation(db: Session, token_hex: str) -> dict:
+    """Return safe preview of an invitation for unregistered users.
+    Never reveals the full email — masks it.
+    """
+    try:
+        token_bytes = bytes.fromhex(token_hex)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
+        )
+    token_hash = sha256_hex(token_bytes)
+    inv = (
+        db.query(OrganizationInvitation)
+        .filter(
+            OrganizationInvitation.token_hash == token_hash,
+            OrganizationInvitation.accepted_at.is_(None),
+            OrganizationInvitation.revoked_at.is_(None),
+            OrganizationInvitation.expires_at > datetime.now(tz=UTC),
+        )
+        .first()
+    )
+    if not inv:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
+        )
+    org = db.query(Organization).filter(Organization.id == inv.org_id).first()
+    org_name = org.name if org else "Unknown"
+    # Mask the email: show first char + *** + @domain
+    email = inv.email
+    local, _, domain = email.partition("@")
+    masked = local[0] + "***" if len(local) > 1 else "***"
+    return {
+        "organization_name": org_name,
+        "role": inv.role,
+        "invited_email_masked": masked + "@" + domain,
+        "expires_at": inv.expires_at.isoformat(),
+    }
+
+
+def accept_invitation_new_user(
+    db: Session,
+    token_hex: str,
+    full_name: str,
+    password: str,
+    *,
+    user_agent: str | None = None,
+    request_id: str | None = None,
+) -> tuple[Organization, Membership, AuthTokens]:
+    """Create a new user account via an invitation token and join the org.
+
+    Token possession serves as email-ownership verification — the new account
+    is created with email_verified=True immediately.
+
+    Uses SELECT FOR UPDATE on the invitation row to prevent concurrent duplicate
+    user creation attempts from both succeeding.
+
+    Returns (org, membership, auth_tokens) so the route can set cookies.
+    """
+    from app.auth.crypto import hash_password
+    from app.services.auth import _create_session, _write_auth_audit
+
+    try:
+        token_bytes = bytes.fromhex(token_hex)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
+        )
+    token_hash = sha256_hex(token_bytes)
+
+    # Lock the invitation row to prevent concurrent acceptance
+    inv = (
+        db.query(OrganizationInvitation)
+        .filter(
+            OrganizationInvitation.token_hash == token_hash,
+            OrganizationInvitation.accepted_at.is_(None),
+            OrganizationInvitation.revoked_at.is_(None),
+            OrganizationInvitation.expires_at > datetime.now(tz=UTC),
+        )
+        .with_for_update()
+        .first()
+    )
+    if not inv:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
+        )
+
+    # Check no existing user with that email (concurrent race protection)
+    existing = db.query(User).filter(User.email == inv.email).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "EMAIL_ALREADY_EXISTS",
+                "message": "An account with this email already exists",
+            },
+        )
+
+    # Create user — token possession = email verified
+    user = User(
+        email=inv.email,
+        hashed_password=hash_password(password),
+        full_name=full_name,
+        email_verified=True,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+
+    # Mark invitation accepted
+    inv.accepted_at = datetime.now(tz=UTC)
+
+    # Create membership
+    membership = Membership(
+        user_id=user.id,
+        org_id=inv.org_id,
+        role=inv.role,
+        is_active=True,
+    )
+    db.add(membership)
+    db.flush()
+
+    org = _require_org(db, inv.org_id)
+
+    # Write audit events
+    _write_audit(
+        db,
+        inv.org_id,
+        user.id,
+        user.id,
+        "user.registered",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
+    _write_audit(
+        db,
+        inv.org_id,
+        user.id,
+        inv.id,
+        "invitation.accepted",
+        {"role": inv.role},
+        target_type="invitation",
+        request_id=request_id,
+    )
+
+    # Create session (auto-login)
+    tokens = _create_session(db, user.id, inv.org_id, membership.id, inv.role, user_agent)
+    _write_auth_audit(
+        db,
+        inv.org_id,
+        user.id,
+        user.id,
+        "auth.login_succeeded",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
+
+    return org, membership, tokens
 
 
 # ── Audit log ──────────────────────────────────────────────────────────────────
@@ -465,8 +833,10 @@ def get_audit_log(db: Session, org_id: str, limit: int = 50, offset: int = 0) ->
             "id": row.id,
             "actor_id": row.actor_id,
             "target_id": row.target_id,
+            "target_type": row.target_type,
             "event_type": row.event_type,
             "payload": row.payload,
+            "request_id": row.request_id,
             "created_at": row.created_at.isoformat(),
         }
         for row in rows
@@ -510,6 +880,9 @@ def _write_audit(
     target_id: str | None,
     event_type: str,
     payload: dict,
+    *,
+    target_type: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Append an audit event in the same transaction as the business mutation.
 
@@ -523,10 +896,54 @@ def _write_audit(
         org_id=org_id,
         actor_id=actor_id,
         target_id=target_id,
+        target_type=target_type,
         event_type=event_type,
         payload=payload,
+        request_id=request_id,
     )
     db.add(event)
+
+
+def _write_audit_independent(
+    event_type: str,
+    org_id: str | None,
+    actor_id: str | None,
+    target_id: str | None,
+    payload: dict,
+    *,
+    target_type: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Write an audit event in its own independent transaction.
+    Used for events that must persist even when the main transaction rolls back
+    (e.g., last_admin.action_blocked, auth.login_failed).
+    Best-effort: failures are silently swallowed.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+
+    from app.config import settings
+
+    engine = create_engine(settings.database_url)
+    try:
+        with engine.begin() as conn:
+            with SASession(bind=conn) as sess:
+                sess.add(
+                    AuditEvent(
+                        org_id=org_id,
+                        actor_id=actor_id,
+                        target_id=target_id,
+                        target_type=target_type,
+                        event_type=event_type,
+                        payload=payload,
+                        request_id=request_id,
+                    )
+                )
+                sess.commit()
+    except Exception:
+        pass  # Best-effort: audit failure must not affect the caller
+    finally:
+        engine.dispose()
 
 
 # ── Email helpers ──────────────────────────────────────────────────────────────

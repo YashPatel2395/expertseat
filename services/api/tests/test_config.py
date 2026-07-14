@@ -117,6 +117,7 @@ def test_env_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
     monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
+    monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
     monkeypatch.setenv("APP_ENV", "production")
     s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
@@ -139,6 +140,7 @@ def test_init_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
     monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
+    monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
     s = Settings(app_env="production", _env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
         f"Init-selected production must not load dotenv, got: {s.database_url!r}"

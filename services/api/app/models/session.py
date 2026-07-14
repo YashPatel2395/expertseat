@@ -38,8 +38,11 @@ class AuthSession(Base):
     )
     refresh_token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     family_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
-    ip_address_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    family_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    family_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

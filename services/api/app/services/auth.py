@@ -1,8 +1,7 @@
 """Authentication service.
 
 All auth business logic lives here. Route handlers are thin — they validate
-input, call service functions, and set cookies. Service functions raise
-HTTPException for all error conditions.
+input, call service functions, and set cookies.
 
 Security invariants:
   - Verification tokens: 32 random bytes (256-bit entropy), SHA-256 hash stored.
@@ -12,11 +11,17 @@ Security invariants:
   - Refresh tokens: 32 random bytes, new session row on rotation (old row
     preserved for replay detection).
   - Access tokens: JWT, never returned in JSON — set only in HttpOnly cookie.
+  - Refresh replay: family revocation persists even when replay is detected.
+    The service raises RefreshReplayDetected (not HTTPException) so the route
+    can commit the revocation before returning 401.
+  - Absolute session family lifetime: family_expires_at is set at login and
+    never extended on rotation.
+  - Password change session policy: current session is kept (refresh token
+    rotated), all other sessions are revoked.
 """
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -31,18 +36,59 @@ from app.auth.crypto import (
     sha256_hex,
     verify_password,
 )
+from app.auth.exceptions import RefreshAccountInvalid, RefreshReplayDetected
 from app.auth.tokens import create_access_token
 from app.config import settings
 from app.email.base import EmailProvider
 from app.email.templates import email_verification, password_reset
-from app.models.organization import Membership
+from app.models.audit import AuditEvent
+from app.models.organization import Membership, Organization
 from app.models.session import AuthSession
 from app.models.user import EmailVerificationToken, PasswordResetToken, User
+
+# ── Audit helper ──────────────────────────────────────────────────────────────
+
+
+def _write_auth_audit(
+    db: Session,
+    org_id: str | None,
+    actor_id: str | None,
+    target_id: str | None,
+    event_type: str,
+    payload: dict,
+    *,
+    target_type: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Append an auth audit event in the same DB session.
+
+    Sensitive values (passwords, tokens, hashes, IPs) must never appear
+    in payload. If this raises, the caller's transaction rolls back too.
+    """
+    db.add(
+        AuditEvent(
+            org_id=org_id,
+            actor_id=actor_id,
+            target_id=target_id,
+            target_type=target_type,
+            event_type=event_type,
+            payload=payload,
+            request_id=request_id,
+        )
+    )
+
 
 # ── Registration ──────────────────────────────────────────────────────────────
 
 
-def register_user(db: Session, email: str, password: str, full_name: str) -> User:
+def register_user(
+    db: Session,
+    email: str,
+    password: str,
+    full_name: str,
+    *,
+    request_id: str | None = None,
+) -> User:
     """Create a new user account. Raises 409 if email already exists."""
     existing = db.query(User).filter(User.email == email.lower()).first()
     if existing:
@@ -62,6 +108,16 @@ def register_user(db: Session, email: str, password: str, full_name: str) -> Use
     )
     db.add(user)
     db.flush()  # Get user.id without committing
+    _write_auth_audit(
+        db,
+        None,
+        user.id,
+        user.id,
+        "user.registered",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
     return user
 
 
@@ -72,7 +128,6 @@ def create_email_verification_token(db: Session, user_id: str) -> str:
     All previous unused verification tokens for this user are invalidated
     (marked used) before creating the new one, so resend always supersedes.
     """
-    # Invalidate all previous unused tokens for this user
     now = datetime.now(tz=UTC)
     db.query(EmailVerificationToken).filter(
         EmailVerificationToken.user_id == user_id,
@@ -92,12 +147,8 @@ def create_email_verification_token(db: Session, user_id: str) -> str:
     return token_hex
 
 
-def verify_email_token(db: Session, token_hex: str) -> None:
-    """Mark user email as verified. Raises 401 if token is invalid or expired.
-
-    Accepts a 64-character hex token (32 random bytes). Computes SHA-256
-    and looks up the matching unused, unexpired record.
-    """
+def verify_email_token(db: Session, token_hex: str, *, request_id: str | None = None) -> None:
+    """Mark user email as verified. Raises 401 if token is invalid or expired."""
     try:
         token_bytes = bytes.fromhex(token_hex)
     except ValueError:
@@ -130,6 +181,16 @@ def verify_email_token(db: Session, token_hex: str) -> None:
     user = db.query(User).filter(User.id == record.user_id).first()
     if user:
         user.email_verified = True
+        _write_auth_audit(
+            db,
+            None,
+            user.id,
+            user.id,
+            "user.email_verified",
+            {},
+            target_type="user",
+            request_id=request_id,
+        )
 
 
 def get_user_by_email(db: Session, email: str) -> User | None:
@@ -159,13 +220,14 @@ def login(
     db: Session,
     email: str,
     password: str,
-    ip_address: str,
     user_agent: str | None,
+    *,
+    request_id: str | None = None,
 ) -> AuthTokens:
     """Authenticate user and create a new auth session.
 
-    Returns AuthTokens with access token, refresh token, and CSRF value.
-    Raises 401 on invalid credentials or unverified email.
+    Returns AuthTokens. Raises HTTPException on invalid credentials.
+    The route handler must write auth.login_failed audit on exception.
     """
     user = get_user_by_email(db, email)
     if not user or not verify_password(user.hashed_password, password):
@@ -187,11 +249,9 @@ def login(
             detail={"error": "ACCOUNT_DISABLED", "message": "This account has been disabled"},
         )
 
-    # Rehash if parameters changed (transparent upgrade)
     if needs_rehash(user.hashed_password):
         user.hashed_password = hash_password(password)
 
-    # Find the user's memberships (prefer most recent org)
     membership = (
         db.query(Membership)
         .filter(Membership.user_id == user.id, Membership.is_active.is_(True))
@@ -208,7 +268,18 @@ def login(
         membership_id = membership.id
         role = membership.role
 
-    return _create_session(db, user.id, org_id, membership_id, role, ip_address, user_agent)
+    tokens = _create_session(db, user.id, org_id, membership_id, role, user_agent)
+    _write_auth_audit(
+        db,
+        org_id or None,
+        user.id,
+        user.id,
+        "auth.login_succeeded",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
+    return tokens
 
 
 def _create_session(
@@ -217,7 +288,6 @@ def _create_session(
     org_id: str,
     membership_id: str,
     role: str,
-    ip_address: str,
     user_agent: str | None,
 ) -> AuthTokens:
     """Create an auth session row and return tokens."""
@@ -226,10 +296,11 @@ def _create_session(
     refresh_token_hash = sha256_hex(refresh_token_bytes)
     family_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
-    ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()
     jti = str(uuid.uuid4())
 
-    expires_at = datetime.now(tz=UTC) + timedelta(seconds=settings.refresh_token_ttl)
+    now = datetime.now(tz=UTC)
+    expires_at = now + timedelta(seconds=settings.refresh_token_ttl)
+    family_expires_at = now + timedelta(seconds=settings.refresh_family_ttl)
 
     session = AuthSession(
         id=session_id,
@@ -238,8 +309,8 @@ def _create_session(
         membership_id=membership_id or None,
         refresh_token_hash=refresh_token_hash,
         family_id=family_id,
-        ip_address_hash=ip_hash,
-        user_agent=user_agent,
+        user_agent_summary=(user_agent or "")[:200] or None,
+        family_expires_at=family_expires_at,
         expires_at=expires_at,
     )
     db.add(session)
@@ -268,22 +339,28 @@ def _create_session(
 def refresh_session(
     db: Session,
     refresh_token_hex_val: str,
-    ip_address: str,
     user_agent: str | None,
+    *,
+    request_id: str | None = None,
 ) -> AuthTokens:
     """Rotate refresh token and issue new access token.
 
-    Implements family-based replay detection with SELECT FOR UPDATE to prevent
-    two concurrent requests from both succeeding on the same token:
+    Transaction boundary contract:
+      - On replay detected: marks family revoked, raises RefreshReplayDetected.
+        The caller MUST db.commit() before returning 401.
+      - On account invalid: raises RefreshAccountInvalid (no commit needed).
+      - On success: caller commits after receiving AuthTokens.
 
-    - Token hash matches an active session → acquire row lock, re-check,
-      revoke old row, create new row in same family.
-    - Token hash matches a REVOKED session → lock family rows, revoke all
-      active family members, raise REFRESH_TOKEN_REUSED.
-    - Token not found at all → INVALID_REFRESH_TOKEN.
+    Account validation policy (after acquiring lock):
+      - User must exist, be active, and be email-verified.
+      - If workspace context carries an invalid/inactive membership or org,
+        the successor session is issued with no workspace context (Policy B:
+        rotate into no-workspace session, not family revocation). The user
+        remains authenticated but loses workspace access until they switch org.
 
-    The row lock ensures exactly one of two concurrent refreshes succeeds;
-    the loser sees revoked_at set and triggers family revocation.
+    Absolute family lifetime:
+      - family_expires_at is inherited from the predecessor and never extended.
+      - If family_expires_at <= now, the token is rejected as expired.
     """
     try:
         token_bytes = bytes.fromhex(refresh_token_hex_val)
@@ -297,7 +374,7 @@ def refresh_session(
         )
     token_hash = sha256_hex(token_bytes)
 
-    # Look up the session row by hash (may be active or already revoked)
+    # Acquire row lock before reading state (prevents TOCTOU race)
     candidate = (
         db.query(AuthSession)
         .filter(AuthSession.refresh_token_hash == token_hash)
@@ -314,22 +391,40 @@ def refresh_session(
             },
         )
 
-    # Re-check state after acquiring the lock
+    # Replay detection: token already used → revoke family, raise domain exception
     if candidate.revoked_at is not None:
-        # Replay detected — revoke entire family
+        now = datetime.now(tz=UTC)
         db.query(AuthSession).filter(
             AuthSession.family_id == candidate.family_id,
             AuthSession.revoked_at.is_(None),
-        ).update({"revoked_at": datetime.now(tz=UTC)})
+        ).update({"revoked_at": now})
+        _write_auth_audit(
+            db,
+            candidate.org_id,
+            candidate.user_id,
+            candidate.user_id,
+            "auth.refresh_reuse_detected",
+            {"family_id": candidate.family_id},
+            target_type="session",
+            request_id=request_id,
+        )
+        # Domain exception: caller commits revocation, then returns 401
+        raise RefreshReplayDetected(candidate.family_id)
+
+    now = datetime.now(tz=UTC)
+
+    # Check absolute family lifetime
+    if candidate.family_expires_at <= now:
         raise HTTPException(
             status_code=401,
             detail={
-                "error": "REFRESH_TOKEN_REUSED",
-                "message": "Refresh token has already been used. All sessions have been revoked.",
+                "error": "SESSION_EXPIRED",
+                "message": "Session family has expired. Please sign in again.",
             },
         )
 
-    if candidate.expires_at <= datetime.now(tz=UTC):
+    # Check per-token idle expiration
+    if candidate.expires_at <= now:
         raise HTTPException(
             status_code=401,
             detail={
@@ -338,41 +433,86 @@ def refresh_session(
             },
         )
 
-    session = candidate
+    # Validate user account state
+    user = db.query(User).filter(User.id == candidate.user_id).first()
+    if not user:
+        raise RefreshAccountInvalid("ACCOUNT_INVALID", "Account not found")
+    if not user.is_active:
+        raise RefreshAccountInvalid("ACCOUNT_DISABLED", "This account has been disabled")
+    if not user.email_verified:
+        raise RefreshAccountInvalid("ACCOUNT_UNVERIFIED", "Email verification required")
 
-    # Rotate: revoke old session row (preserving hash for future replay detection),
-    # then insert a new row in the same family.
+    # Validate workspace context (Policy B: strip invalid context, do not revoke)
+    org_id: str | None = candidate.org_id
+    membership_id: str | None = candidate.membership_id
+    role = ""
+
+    if org_id and membership_id:
+        membership = (
+            db.query(Membership)
+            .filter(
+                Membership.id == membership_id,
+                Membership.user_id == candidate.user_id,
+                Membership.org_id == org_id,
+                Membership.is_active.is_(True),
+            )
+            .first()
+        )
+        org = (
+            (
+                db.query(Organization)
+                .filter(Organization.id == org_id, Organization.is_active.is_(True))
+                .first()
+            )
+            if membership
+            else None
+        )
+
+        if membership and org:
+            role = membership.role
+        else:
+            # Workspace context is invalid — strip to no-workspace session
+            org_id = None
+            membership_id = None
+
+    # Revoke predecessor row (keep hash for replay detection)
+    candidate.revoked_at = now
+
+    # Create successor row in the same family
     new_bytes = generate_token_bytes(32)
     new_hex = new_bytes.hex()
     new_hash = sha256_hex(new_bytes)
     new_session_id = str(uuid.uuid4())
     new_jti = str(uuid.uuid4())
     new_csrf = generate_token_hex(32)
-    new_ip_hash = hashlib.sha256(ip_address.encode()).hexdigest()
-
-    session.revoked_at = datetime.now(tz=UTC)
-
-    # Derive current role from DB (do not trust JWT role claim)
-    membership = db.query(Membership).filter(Membership.id == session.membership_id).first()
-    role = membership.role if membership and membership.is_active else ""
-    org_id = session.org_id if membership and membership.is_active else None
-    membership_id = session.membership_id if membership and membership.is_active else None
 
     new_session = AuthSession(
         id=new_session_id,
-        user_id=session.user_id,
+        user_id=candidate.user_id,
         org_id=org_id,
         membership_id=membership_id,
         refresh_token_hash=new_hash,
-        family_id=session.family_id,
-        ip_address_hash=new_ip_hash,
-        user_agent=user_agent or session.user_agent,
-        expires_at=datetime.now(tz=UTC) + timedelta(seconds=settings.refresh_token_ttl),
+        family_id=candidate.family_id,
+        user_agent_summary=(user_agent or candidate.user_agent_summary or "")[:200] or None,
+        family_created_at=candidate.family_created_at,
+        family_expires_at=candidate.family_expires_at,  # never extended
+        expires_at=now + timedelta(seconds=settings.refresh_token_ttl),
     )
     db.add(new_session)
 
+    _write_auth_audit(
+        db,
+        org_id,
+        candidate.user_id,
+        new_session_id,
+        "auth.refresh_rotated",
+        {},
+        target_type="session",
+        request_id=request_id,
+    )
+
     access_token = create_access_token(
-        user_id=session.user_id,
+        user_id=candidate.user_id,
         session_id=new_session_id,
         org_id=org_id or "",
         membership_id=membership_id or "",
@@ -391,20 +531,53 @@ def refresh_session(
 # ── Logout ────────────────────────────────────────────────────────────────────
 
 
-def logout(db: Session, session_id: str) -> None:
-    """Revoke a single session."""
+def logout(
+    db: Session,
+    session_id: str,
+    user_id: str,
+    org_id: str | None,
+    *,
+    request_id: str | None = None,
+) -> None:
+    """Revoke a single session and write audit event."""
     db.query(AuthSession).filter(
         AuthSession.id == session_id,
         AuthSession.revoked_at.is_(None),
     ).update({"revoked_at": datetime.now(tz=UTC)})
+    _write_auth_audit(
+        db,
+        org_id,
+        user_id,
+        session_id,
+        "auth.logout",
+        {},
+        target_type="session",
+        request_id=request_id,
+    )
 
 
-def logout_all(db: Session, user_id: str) -> None:
-    """Revoke all active sessions for a user."""
+def logout_all(
+    db: Session,
+    user_id: str,
+    org_id: str | None,
+    *,
+    request_id: str | None = None,
+) -> None:
+    """Revoke all active sessions for a user and write audit event."""
     db.query(AuthSession).filter(
         AuthSession.user_id == user_id,
         AuthSession.revoked_at.is_(None),
     ).update({"revoked_at": datetime.now(tz=UTC)})
+    _write_auth_audit(
+        db,
+        org_id,
+        user_id,
+        user_id,
+        "auth.logout_all",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
 
 
 # ── Session listing ───────────────────────────────────────────────────────────
@@ -425,8 +598,7 @@ def list_sessions(db: Session, user_id: str, current_session_id: str) -> list[di
     return [
         {
             "id": s.id,
-            "ip_address_hash": s.ip_address_hash[:8] + "...",
-            "user_agent": s.user_agent,
+            "user_agent_summary": s.user_agent_summary,
             "last_used_at": s.last_used_at.isoformat(),
             "created_at": s.created_at.isoformat(),
             "current": s.id == current_session_id,
@@ -435,7 +607,14 @@ def list_sessions(db: Session, user_id: str, current_session_id: str) -> list[di
     ]
 
 
-def revoke_session(db: Session, user_id: str, session_id: str) -> None:
+def revoke_session(
+    db: Session,
+    user_id: str,
+    session_id: str,
+    org_id: str | None,
+    *,
+    request_id: str | None = None,
+) -> None:
     """Revoke a specific session belonging to the user. Raises 404 if not found."""
     session = (
         db.query(AuthSession)
@@ -448,20 +627,24 @@ def revoke_session(db: Session, user_id: str, session_id: str) -> None:
             detail={"error": "SESSION_NOT_FOUND", "message": "Session not found"},
         )
     session.revoked_at = datetime.now(tz=UTC)
+    _write_auth_audit(
+        db,
+        org_id,
+        user_id,
+        session_id,
+        "auth.session_revoked",
+        {},
+        target_type="session",
+        request_id=request_id,
+    )
 
 
 # ── Password reset ────────────────────────────────────────────────────────────
 
 
 def create_password_reset_token(db: Session, user_id: str) -> str:
-    """Generate a password reset token, invalidate prior tokens, return hex token.
-
-    Uses 32 cryptographically random bytes (256-bit entropy). Expiry is
-    settings.password_reset_ttl (default 30 minutes). All unused prior reset
-    tokens for this user are invalidated on each new request.
-    """
+    """Generate a password reset token, invalidate prior tokens, return hex token."""
     now = datetime.now(tz=UTC)
-    # Invalidate all previous unused reset tokens for this user
     db.query(PasswordResetToken).filter(
         PasswordResetToken.user_id == user_id,
         PasswordResetToken.used_at.is_(None),
@@ -480,10 +663,16 @@ def create_password_reset_token(db: Session, user_id: str) -> str:
     return token_hex
 
 
-def reset_password(db: Session, token_hex: str, new_password: str) -> None:
-    """Reset password using a valid reset token. Raises 401 if invalid.
+def reset_password(
+    db: Session,
+    token_hex: str,
+    new_password: str,
+    *,
+    request_id: str | None = None,
+) -> None:
+    """Reset password using a valid reset token.
 
-    Also updates password_changed_at and revokes all active sessions.
+    Revokes all active sessions and updates password_changed_at.
     """
     try:
         token_bytes = bytes.fromhex(token_hex)
@@ -518,15 +707,44 @@ def reset_password(db: Session, token_hex: str, new_password: str) -> None:
     if user:
         user.hashed_password = hash_password(new_password)
         user.password_changed_at = datetime.now(tz=UTC)
-    # Revoke all sessions after password reset (DB-backed auth will reject them)
-    db.query(AuthSession).filter(
-        AuthSession.user_id == reset_token.user_id,
-        AuthSession.revoked_at.is_(None),
-    ).update({"revoked_at": datetime.now(tz=UTC)})
+        db.query(AuthSession).filter(
+            AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None),
+        ).update({"revoked_at": datetime.now(tz=UTC)})
+        _write_auth_audit(
+            db,
+            None,
+            user.id,
+            user.id,
+            "auth.password_reset_completed",
+            {},
+            target_type="user",
+            request_id=request_id,
+        )
 
 
-def change_password(db: Session, user_id: str, current_password: str, new_password: str) -> None:
-    """Change password for authenticated user. Raises 401 if current password wrong."""
+def change_password(
+    db: Session,
+    user_id: str,
+    current_session_id: str,
+    current_password: str,
+    new_password: str,
+    current_org_id: str | None,
+    current_user_agent: str | None,
+    *,
+    request_id: str | None = None,
+) -> AuthTokens:
+    """Change password for authenticated user.
+
+    Password-change session policy:
+      - Current session is kept active (refresh token rotated).
+      - All other session families are revoked immediately.
+      - password_changed_at is updated.
+      - auth.password_changed audit event is written.
+
+    Raises 401 if current_password is wrong.
+    Returns new AuthTokens for the current session (caller must set cookies).
+    """
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not verify_password(user.hashed_password, current_password):
         raise HTTPException(
@@ -535,6 +753,109 @@ def change_password(db: Session, user_id: str, current_password: str, new_passwo
         )
     user.hashed_password = hash_password(new_password)
     user.password_changed_at = datetime.now(tz=UTC)
+
+    # Revoke all sessions EXCEPT the current session's family
+    current_session = (
+        db.query(AuthSession)
+        .filter(AuthSession.id == current_session_id, AuthSession.revoked_at.is_(None))
+        .first()
+    )
+    if current_session:
+        current_family_id = current_session.family_id
+        # Revoke all OTHER families
+        db.query(AuthSession).filter(
+            AuthSession.user_id == user_id,
+            AuthSession.family_id != current_family_id,
+            AuthSession.revoked_at.is_(None),
+        ).update({"revoked_at": datetime.now(tz=UTC)})
+        # Rotate current session's refresh token
+        current_session.revoked_at = datetime.now(tz=UTC)
+        membership_id = current_session.membership_id
+        org_id = current_session.org_id
+
+        # Derive role from DB
+        role = ""
+        if membership_id:
+            membership = (
+                db.query(Membership)
+                .filter(Membership.id == membership_id, Membership.is_active.is_(True))
+                .first()
+            )
+            if membership:
+                role = membership.role
+
+        new_bytes = generate_token_bytes(32)
+        new_hex = new_bytes.hex()
+        new_hash = sha256_hex(new_bytes)
+        new_session_id = str(uuid.uuid4())
+        new_jti = str(uuid.uuid4())
+        new_csrf = generate_token_hex(32)
+        now = datetime.now(tz=UTC)
+
+        new_session = AuthSession(
+            id=new_session_id,
+            user_id=user_id,
+            org_id=org_id,
+            membership_id=membership_id,
+            refresh_token_hash=new_hash,
+            family_id=current_family_id,
+            user_agent_summary=(current_user_agent or current_session.user_agent_summary or "")[
+                :200
+            ]
+            or None,
+            family_created_at=current_session.family_created_at,
+            family_expires_at=current_session.family_expires_at,
+            expires_at=now + timedelta(seconds=settings.refresh_token_ttl),
+        )
+        db.add(new_session)
+
+        access_token = create_access_token(
+            user_id=user_id,
+            session_id=new_session_id,
+            org_id=org_id or "",
+            membership_id=membership_id or "",
+            role=role,
+            jti=new_jti,
+        )
+        _write_auth_audit(
+            db,
+            current_org_id,
+            user_id,
+            user_id,
+            "auth.password_changed",
+            {},
+            target_type="user",
+            request_id=request_id,
+        )
+        return AuthTokens(
+            access_token=access_token,
+            refresh_token_hex=new_hex,
+            csrf_value=new_csrf,
+            session_id=new_session_id,
+        )
+    else:
+        # Session not found — revoke all and issue new login required
+        db.query(AuthSession).filter(
+            AuthSession.user_id == user_id,
+            AuthSession.revoked_at.is_(None),
+        ).update({"revoked_at": datetime.now(tz=UTC)})
+        _write_auth_audit(
+            db,
+            current_org_id,
+            user_id,
+            user_id,
+            "auth.password_changed",
+            {},
+            target_type="user",
+            request_id=request_id,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "SESSION_NOT_FOUND",
+                "message": "Session not found. Please sign in again.",
+            },
+        )
 
 
 # ── Org switching ─────────────────────────────────────────────────────────────
@@ -545,13 +866,10 @@ def switch_org(
     user_id: str,
     session_id: str,
     target_org_id: str,
+    *,
+    request_id: str | None = None,
 ) -> AuthTokens:
-    """Switch the active organization for the current session.
-
-    Validates the user has an active membership in the target org,
-    updates the session, and issues a new access token.
-    Raises 403 if the user is not a member of the target org.
-    """
+    """Switch the active organization for the current session."""
     membership = (
         db.query(Membership)
         .filter(
@@ -594,10 +912,20 @@ def switch_org(
         role=membership.role,
         jti=jti,
     )
+    _write_auth_audit(
+        db,
+        target_org_id,
+        user_id,
+        target_org_id,
+        "workspace.switched",
+        {},
+        target_type="organization",
+        request_id=request_id,
+    )
 
     return AuthTokens(
         access_token=access_token,
-        refresh_token_hex="",  # Refresh token unchanged on org switch
+        refresh_token_hex="",
         csrf_value=new_csrf,
         session_id=session_id,
     )

@@ -45,13 +45,14 @@ class Settings(BaseSettings):
     # Token lifetimes (seconds)
     access_token_ttl: int = 600  # 10 minutes
     refresh_token_ttl: int = 1_209_600  # 14 days
+    refresh_family_ttl: int = 1_209_600  # 14 days — absolute session family lifetime
     password_reset_ttl: int = 1_800  # 30 minutes
 
     # Rate limiting (fixed-window)
     rate_limit_auth_max: int = 10  # max attempts per window
     rate_limit_auth_window: int = 60  # window in seconds
     # Dedicated HMAC secret for rate-limit key derivation.
-    # Defaults to secret_key if unset; override with a separate value in production.
+    # Required in production; must be at least 32 chars and different from SECRET_KEY.
     rate_limit_secret: str = ""
 
     # Email (SMTP — dev default matches Mailpit in docker-compose.yml)
@@ -103,6 +104,15 @@ class Settings(BaseSettings):
                     "SECRET_KEY must be explicitly set in production; "
                     "the development default cannot be used"
                 )
+            if not self.rate_limit_secret:
+                raise ValueError(
+                    "RATE_LIMIT_SECRET must be set in production; "
+                    "it must be at least 32 characters and different from SECRET_KEY"
+                )
+            if len(self.rate_limit_secret) < 32:
+                raise ValueError("RATE_LIMIT_SECRET must be at least 32 characters")
+            if self.rate_limit_secret == self.secret_key:
+                raise ValueError("RATE_LIMIT_SECRET must be different from SECRET_KEY")
         return self
 
     @classmethod
