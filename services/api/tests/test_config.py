@@ -1,4 +1,5 @@
 import os
+import secrets
 
 import pytest
 from pydantic import ValidationError
@@ -118,10 +119,7 @@ def test_env_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
     monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
     monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
-    monkeypatch.setenv(
-        "OUTBOX_ENCRYPTION_KEY",
-        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-    )
+    monkeypatch.setenv("OUTBOX_ENCRYPTION_KEY", secrets.token_hex(32))
     monkeypatch.setenv("APP_ENV", "production")
     s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
@@ -145,10 +143,7 @@ def test_init_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
     monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
     monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
-    monkeypatch.setenv(
-        "OUTBOX_ENCRYPTION_KEY",
-        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-    )
+    monkeypatch.setenv("OUTBOX_ENCRYPTION_KEY", secrets.token_hex(32))
     s = Settings(app_env="production", _env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
         f"Init-selected production must not load dotenv, got: {s.database_url!r}"

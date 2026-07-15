@@ -10,6 +10,8 @@ Covers:
   - Raw IP is not present in the pseudonym output
 """
 
+import secrets
+
 import pytest
 from pydantic import ValidationError
 
@@ -21,7 +23,7 @@ _PROD_DB = "postgresql://prod:x@prod-host:5432/proddb"
 _PROD_REDIS = "redis://prod-redis:6379/0"
 _PROD_SECRET = "production-secret-key-that-is-long-enough-00"
 _PROD_RATE_SECRET = "production-rate-limit-secret-that-is-long-enough-xx"
-_PROD_OUTBOX_KEY = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+_PROD_OUTBOX_KEY = secrets.token_hex(32)
 
 
 # ── 1. Missing RATE_LIMIT_SECRET fails production validation ──────────────────

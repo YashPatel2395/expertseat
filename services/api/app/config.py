@@ -62,8 +62,9 @@ class Settings(BaseSettings):
     # Hex-encoded 32-byte (256-bit) key — separate from SECRET_KEY and RATE_LIMIT_SECRET.
     # Generate: python3 -c "import secrets; print(secrets.token_hex(32))"
     # Required in production; must differ from SECRET_KEY.
-    # Development default is a fixed placeholder that MUST NOT be used in production.
-    outbox_encryption_key: str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
+    outbox_encryption_key: str = ""
+    # Keyring format: 'v1:<hex>,v2:<hex>' — preferred over outbox_encryption_key.
+    outbox_encryption_keys: str = ""
     # Identifies the active key slot for key rotation.  Records store this
     # so the worker can select the correct key on decryption.
     outbox_active_key_id: str = "v1"
@@ -137,24 +138,45 @@ class Settings(BaseSettings):
                 raise ValueError("RATE_LIMIT_SECRET must be at least 32 characters")
             if self.rate_limit_secret == self.secret_key:
                 raise ValueError("RATE_LIMIT_SECRET must be different from SECRET_KEY")
-            _dev_outbox_key = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
-            if self.outbox_encryption_key == _dev_outbox_key:
+            # Require at least one outbox key in production
+            if not self.outbox_encryption_keys and not self.outbox_encryption_key:
                 raise ValueError(
-                    "OUTBOX_ENCRYPTION_KEY must be explicitly set in production; "
-                    "the development default cannot be used"
+                    "OUTBOX_ENCRYPTION_KEYS (or OUTBOX_ENCRYPTION_KEY) must be set in production"
                 )
-            try:
-                outbox_key_bytes = bytes.fromhex(self.outbox_encryption_key)
-            except ValueError as exc:
-                raise ValueError("OUTBOX_ENCRYPTION_KEY must be a hex-encoded string") from exc
-            if len(outbox_key_bytes) != 32:
-                raise ValueError(
-                    "OUTBOX_ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)"
-                )
-            if self.outbox_encryption_key == self.secret_key:
-                raise ValueError("OUTBOX_ENCRYPTION_KEY must be different from SECRET_KEY")
-            if self.outbox_encryption_key == self.rate_limit_secret:
-                raise ValueError("OUTBOX_ENCRYPTION_KEY must be different from RATE_LIMIT_SECRET")
+            # Validate whichever is set
+            if self.outbox_encryption_keys:
+                for entry in self.outbox_encryption_keys.split(","):
+                    kid_part, _, hex_part = entry.strip().partition(":")
+                    if not kid_part or not hex_part:
+                        raise ValueError(
+                            f"OUTBOX_ENCRYPTION_KEYS entry {entry!r} must be 'kid:hex'"
+                        )
+                    try:
+                        key_bytes = bytes.fromhex(hex_part)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"OUTBOX_ENCRYPTION_KEYS key '{kid_part}' is not valid hex"
+                        ) from exc
+                    if len(key_bytes) != 32:
+                        raise ValueError(
+                            f"OUTBOX_ENCRYPTION_KEYS key '{kid_part}' must be 32 bytes; "
+                            f"got {len(key_bytes)}"
+                        )
+            elif self.outbox_encryption_key:
+                try:
+                    key_bytes = bytes.fromhex(self.outbox_encryption_key)
+                except ValueError as exc:
+                    raise ValueError("OUTBOX_ENCRYPTION_KEY must be a hex-encoded string") from exc
+                if len(key_bytes) != 32:
+                    raise ValueError(
+                        "OUTBOX_ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)"
+                    )
+                if self.outbox_encryption_key == self.secret_key:
+                    raise ValueError("OUTBOX_ENCRYPTION_KEY must be different from SECRET_KEY")
+                if self.outbox_encryption_key == self.rate_limit_secret:
+                    raise ValueError(
+                        "OUTBOX_ENCRYPTION_KEY must be different from RATE_LIMIT_SECRET"
+                    )
         return self
 
     @classmethod
