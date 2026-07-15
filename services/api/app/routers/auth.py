@@ -20,7 +20,7 @@ from app.auth.cookies import (
 )
 from app.auth.csrf import require_csrf
 from app.auth.deps import CurrentUser, get_current_user
-from app.auth.exceptions import RefreshAccountInvalid, RefreshReplayDetected
+from app.auth.exceptions import RefreshAccountDisabled, RefreshAccountInvalid, RefreshReplayDetected
 from app.auth.ratelimit import auth_rate_limit
 from app.database import get_db
 from app.email.base import EmailProvider
@@ -77,7 +77,7 @@ class UserResponse(BaseModel):
     user_id: str
     email: str
     session_id: str
-    org_id: str
+    org_id: str | None
     role: str
 
 
@@ -193,6 +193,17 @@ async def refresh(
             detail={
                 "error": "REFRESH_TOKEN_REUSED",
                 "message": "Refresh token has already been used. All sessions have been revoked.",
+            },
+        )
+    except RefreshAccountDisabled:
+        # Family revocation already staged — commit before returning 401
+        db.commit()
+        clear_auth_cookies(response)
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "ACCOUNT_DISABLED",
+                "message": "This account has been disabled. All sessions have been revoked.",
             },
         )
     except RefreshAccountInvalid as exc:
@@ -362,6 +373,6 @@ async def me(
         user_id=current_user.user_id,
         email=user.email,
         session_id=current_user.session_id,
-        org_id=current_user.org_id,
+        org_id=current_user.org_id,  # None when no active workspace
         role=current_user.role,
     )

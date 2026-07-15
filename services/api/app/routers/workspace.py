@@ -11,6 +11,7 @@ from app.auth.cookies import set_auth_cookies
 from app.auth.csrf import require_csrf
 from app.auth.deps import WorkspaceContext, get_current_user, get_workspace_context
 from app.auth.policy import check_can_manage_member, require_role
+from app.auth.ratelimit import invitation_rate_limit
 from app.database import get_db
 from app.email.base import EmailProvider
 from app.email.deps import get_email_provider
@@ -55,6 +56,10 @@ class AcceptInvitationNewUserRequest(BaseModel):
     token: str = Field(min_length=64, max_length=64)
     full_name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=_PASSWORD_MIN, max_length=_PASSWORD_MAX)
+    terms_accepted: bool
+    privacy_notice_accepted: bool
+    terms_version: str = Field(min_length=1, max_length=50)
+    privacy_notice_version: str = Field(min_length=1, max_length=50)
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -198,40 +203,50 @@ async def create_invitation(
     provider: EmailProvider = Depends(get_email_provider),
     _role: None = Depends(require_role("admin")),
     _csrf: None = Depends(require_csrf),
+    _rl: None = Depends(invitation_rate_limit("invitation-create")),
 ) -> dict:
+    from app.email.outbox import attempt_delivery_after_commit, enqueue_email
+    from app.email.templates import workspace_invitation
+    from app.models.user import User
+
     invitation = ws.create_invitation(
         db, ctx.org_id, str(body.email), body.role, ctx.user_id, request_id=_request_id(request)
     )
-    # Attempt email delivery BEFORE committing so delivery status is committed together
     token_hex = getattr(invitation, "_plaintext_token", "")
-    delivery_status = "pending"
-    failure_code: str | None = None
+    outbox_row_id: str | None = None
     if token_hex:
         org = ws.get_organization(db, ctx.org_id)
-        from app.models.user import User
-
         actor = db.query(User).filter(User.id == ctx.user_id).first()
         actor_name = actor.full_name if actor else "Someone"
-        try:
-            await ws.send_invitation_email(
-                provider, org, actor_name, invitation.email, invitation.role, token_hex
-            )
-            delivery_status = "sent"
-        except Exception:
-            logger.warning(
-                "Invitation email delivery failed",
-                invitation_id=invitation.id,
-                email=invitation.email,
-            )
-            delivery_status = "failed"
-            failure_code = "SMTP_ERROR"
-    ws.update_invitation_delivery(db, invitation.id, delivery_status, failure_code)
-    db.commit()
+        html, text = workspace_invitation(org.name, actor_name, invitation.role, token_hex)
+        outbox_row = enqueue_email(
+            db,
+            to=invitation.email,
+            subject=f"You've been invited to join {org.name} on ExpertSeat",
+            html_body=html,
+            text_body=text,
+            kind="invitation",
+        )
+        ws.update_invitation_delivery(db, invitation.id, "queued", None)
+        # Commit invitation + outbox row atomically BEFORE attempting delivery.
+        # The outbox row guarantees durability: SMTP failure leaves a retryable row.
+        db.commit()
+        outbox_row_id = outbox_row.id
+    else:
+        ws.update_invitation_delivery(db, invitation.id, "queued", None)
+        db.commit()
+
+    # Post-commit delivery using the same session so test savepoint isolation works.
+    # HTTP response is always "queued" regardless of SMTP outcome (enumeration resistance).
+    if outbox_row_id:
+        await attempt_delivery_after_commit(outbox_row_id, provider, db)
+        db.commit()  # persist delivery status (sent / retry / dead)
+
     return {
         "id": invitation.id,
         "email": invitation.email,
         "role": invitation.role,
-        "delivery_status": delivery_status,
+        "delivery_status": "queued",
     }
 
 
@@ -244,30 +259,42 @@ async def resend_invitation(
     provider: EmailProvider = Depends(get_email_provider),
     _role: None = Depends(require_role("admin")),
     _csrf: None = Depends(require_csrf),
+    _rl: None = Depends(invitation_rate_limit("invitation-resend")),
 ) -> dict:
+    from app.email.outbox import attempt_delivery_after_commit, enqueue_email
+    from app.email.templates import workspace_invitation
+    from app.models.user import User
+
     invitation = ws.resend_invitation(
         db, ctx.org_id, invitation_id, ctx.user_id, request_id=_request_id(request)
     )
     token_hex = getattr(invitation, "_plaintext_token", "")
-    delivery_status = "pending"
-    failure_code: str | None = None
+    outbox_row_id: str | None = None
     if token_hex:
         org = ws.get_organization(db, ctx.org_id)
-        from app.models.user import User
-
         actor = db.query(User).filter(User.id == ctx.user_id).first()
         actor_name = actor.full_name if actor else "Someone"
-        try:
-            await ws.send_invitation_email(
-                provider, org, actor_name, invitation.email, invitation.role, token_hex
-            )
-            delivery_status = "sent"
-        except Exception:
-            delivery_status = "failed"
-            failure_code = "SMTP_ERROR"
-    ws.update_invitation_delivery(db, invitation.id, delivery_status, failure_code)
-    db.commit()
-    return {"message": "Invitation resent.", "delivery_status": delivery_status}
+        html, text = workspace_invitation(org.name, actor_name, invitation.role, token_hex)
+        outbox_row = enqueue_email(
+            db,
+            to=invitation.email,
+            subject=f"You've been invited to join {org.name} on ExpertSeat",
+            html_body=html,
+            text_body=text,
+            kind="invitation",
+        )
+        ws.update_invitation_delivery(db, invitation.id, "queued", None)
+        db.commit()
+        outbox_row_id = outbox_row.id
+    else:
+        ws.update_invitation_delivery(db, invitation.id, "queued", None)
+        db.commit()
+
+    if outbox_row_id:
+        await attempt_delivery_after_commit(outbox_row_id, provider, db)
+        db.commit()  # persist delivery status (sent / retry / dead)
+
+    return {"message": "Invitation resent.", "delivery_status": "queued"}
 
 
 @router.delete("/invitations/{invitation_id}", status_code=200)
@@ -306,6 +333,7 @@ async def accept_invitation(
     db: Session = Depends(get_db),
     current_user: WorkspaceContext = Depends(get_current_user),
     _csrf: None = Depends(require_csrf),
+    _rl: None = Depends(invitation_rate_limit("invitation-accept")),
 ) -> dict:
     org, membership = ws.accept_invitation(
         db, body.token, current_user.user_id, request_id=_request_id(request)
@@ -324,18 +352,61 @@ async def accept_invitation_new_user(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
+    _rl: None = Depends(invitation_rate_limit("invitation-accept-new")),
 ) -> dict:
     """Accept an invitation as a new (unregistered) user.
 
     Creates the user account, treats token possession as email verification,
-    creates the membership, and auto-signs the user in.
+    creates the membership, records versioned consent, and auto-signs the user in.
+
+    Consent is required: terms_accepted and privacy_notice_accepted must both be True,
+    and the provided version strings must be in the currently supported versions list.
     """
+    from app.config import settings as _settings
+
+    if not body.terms_accepted:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "TERMS_NOT_ACCEPTED",
+                "message": "You must accept the terms of service",
+            },
+        )
+    if not body.privacy_notice_accepted:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "PRIVACY_NOT_ACCEPTED",
+                "message": "You must accept the privacy notice",
+            },
+        )
+    if body.terms_version not in _settings.supported_terms_versions:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "UNSUPPORTED_TERMS_VERSION",
+                "message": f"Terms version '{body.terms_version}' is not supported",
+            },
+        )
+    if body.privacy_notice_version not in _settings.supported_privacy_versions:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "UNSUPPORTED_PRIVACY_VERSION",
+                "message": (
+                    f"Privacy notice version '{body.privacy_notice_version}' is not supported"
+                ),
+            },
+        )
+
     user_agent = request.headers.get("user-agent")
     org, membership, tokens = ws.accept_invitation_new_user(
         db,
         body.token,
         body.full_name,
         body.password,
+        terms_version=body.terms_version,
+        privacy_notice_version=body.privacy_notice_version,
         user_agent=user_agent,
         request_id=_request_id(request),
     )

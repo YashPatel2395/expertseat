@@ -33,14 +33,26 @@ from app.models.user import User
 class CurrentUser:
     user_id: str
     session_id: str
-    org_id: str
-    membership_id: str
+    org_id: str | None
+    membership_id: str | None
     role: str
     jti: str
 
 
-# Alias: workspace context is the same object — named for clarity at call sites
-WorkspaceContext = CurrentUser
+@dataclass(frozen=True)
+class WorkspaceContext:
+    """Like CurrentUser but with org_id/membership_id guaranteed non-None.
+
+    Returned by get_workspace_context after the 403 guard; callers can safely
+    pass org_id / membership_id to service functions typed as str.
+    """
+
+    user_id: str
+    session_id: str
+    org_id: str
+    membership_id: str
+    role: str
+    jti: str
 
 
 async def get_current_user(
@@ -99,12 +111,14 @@ async def get_current_user(
         ) from exc
 
     # ── Step 2–3: Validate session in DB ──────────────────────────────────────
+    now = datetime.now(tz=UTC)
     session = (
         db.query(AuthSession)
         .filter(
             AuthSession.id == claimed_session_id,
             AuthSession.revoked_at.is_(None),
-            AuthSession.expires_at > datetime.now(tz=UTC),
+            AuthSession.expires_at > now,
+            AuthSession.family_expires_at > now,
         )
         .first()
     )
@@ -131,8 +145,8 @@ async def get_current_user(
         )
 
     # ── Step 5–6: Derive authoritative org context from DB ────────────────────
-    org_id = ""
-    membership_id = ""
+    org_id: str | None = None
+    membership_id: str | None = None
     role = ""
 
     if session.org_id and session.membership_id:
@@ -184,7 +198,7 @@ async def get_workspace_context(
     In all cases the user remains authenticated (get_current_user succeeds)
     but workspace-scoped endpoints are gated here.
     """
-    if not user.org_id:
+    if not user.org_id or not user.membership_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -192,4 +206,11 @@ async def get_workspace_context(
                 "message": ("No active workspace. Please create or join an organization first."),
             },
         )
-    return user
+    return WorkspaceContext(
+        user_id=user.user_id,
+        session_id=user.session_id,
+        org_id=user.org_id,
+        membership_id=user.membership_id,
+        role=user.role,
+        jti=user.jti,
+    )

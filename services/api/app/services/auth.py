@@ -36,7 +36,7 @@ from app.auth.crypto import (
     sha256_hex,
     verify_password,
 )
-from app.auth.exceptions import RefreshAccountInvalid, RefreshReplayDetected
+from app.auth.exceptions import RefreshAccountDisabled, RefreshAccountInvalid, RefreshReplayDetected
 from app.auth.tokens import create_access_token
 from app.config import settings
 from app.email.base import EmailProvider
@@ -254,14 +254,19 @@ def login(
 
     membership = (
         db.query(Membership)
-        .filter(Membership.user_id == user.id, Membership.is_active.is_(True))
+        .join(Organization, Membership.org_id == Organization.id)
+        .filter(
+            Membership.user_id == user.id,
+            Membership.is_active.is_(True),
+            Organization.is_active.is_(True),
+        )
         .order_by(Membership.created_at.desc())
         .first()
     )
 
     if not membership:
-        org_id = ""
-        membership_id = ""
+        org_id = None
+        membership_id = None
         role = ""
     else:
         org_id = membership.org_id
@@ -271,7 +276,7 @@ def login(
     tokens = _create_session(db, user.id, org_id, membership_id, role, user_agent)
     _write_auth_audit(
         db,
-        org_id or None,
+        org_id,
         user.id,
         user.id,
         "auth.login_succeeded",
@@ -285,31 +290,46 @@ def login(
 def _create_session(
     db: Session,
     user_id: str,
-    org_id: str,
-    membership_id: str,
+    org_id: str | None,
+    membership_id: str | None,
     role: str,
     user_agent: str | None,
+    *,
+    family_id: str | None = None,
+    family_created_at: datetime | None = None,
+    family_expires_at: datetime | None = None,
 ) -> AuthTokens:
-    """Create an auth session row and return tokens."""
+    """Create an auth session row and return tokens.
+
+    When family_id/family_created_at/family_expires_at are provided, this
+    session is a successor within an existing family (rotation). The successor
+    inherits family_expires_at and its expires_at is capped to never exceed it.
+    When omitted, a new family is created (initial login).
+    """
     refresh_token_bytes = generate_token_bytes(32)
     refresh_token_hex_val = refresh_token_bytes.hex()
     refresh_token_hash = sha256_hex(refresh_token_bytes)
-    family_id = str(uuid.uuid4())
+    new_family_id = family_id or str(uuid.uuid4())
     session_id = str(uuid.uuid4())
     jti = str(uuid.uuid4())
 
     now = datetime.now(tz=UTC)
-    expires_at = now + timedelta(seconds=settings.refresh_token_ttl)
-    family_expires_at = now + timedelta(seconds=settings.refresh_family_ttl)
+    if family_expires_at is None:
+        # New family: set absolute family lifetime from now
+        family_expires_at = now + timedelta(seconds=settings.refresh_family_ttl)
+
+    # Cap idle expiry at absolute family expiry (never extend family lifetime)
+    expires_at = min(now + timedelta(seconds=settings.refresh_token_ttl), family_expires_at)
 
     session = AuthSession(
         id=session_id,
         user_id=user_id,
-        org_id=org_id or None,
-        membership_id=membership_id or None,
+        org_id=org_id,
+        membership_id=membership_id,
         refresh_token_hash=refresh_token_hash,
-        family_id=family_id,
+        family_id=new_family_id,
         user_agent_summary=(user_agent or "")[:200] or None,
+        family_created_at=family_created_at,
         family_expires_at=family_expires_at,
         expires_at=expires_at,
     )
@@ -438,7 +458,22 @@ def refresh_session(
     if not user:
         raise RefreshAccountInvalid("ACCOUNT_INVALID", "Account not found")
     if not user.is_active:
-        raise RefreshAccountInvalid("ACCOUNT_DISABLED", "This account has been disabled")
+        # Revoke entire family, then raise so route commits revocation before 401
+        db.query(AuthSession).filter(
+            AuthSession.family_id == candidate.family_id,
+            AuthSession.revoked_at.is_(None),
+        ).update({"revoked_at": now})
+        _write_auth_audit(
+            db,
+            candidate.org_id,
+            candidate.user_id,
+            candidate.user_id,
+            "auth.session_revoked_account_disabled",
+            {"family_id": candidate.family_id},
+            target_type="session",
+            request_id=request_id,
+        )
+        raise RefreshAccountDisabled(candidate.user_id)
     if not user.email_verified:
         raise RefreshAccountInvalid("ACCOUNT_UNVERIFIED", "Email verification required")
 
@@ -486,6 +521,12 @@ def refresh_session(
     new_jti = str(uuid.uuid4())
     new_csrf = generate_token_hex(32)
 
+    # Cap idle expiry at absolute family expiry (never extend family lifetime)
+    successor_expires_at = min(
+        now + timedelta(seconds=settings.refresh_token_ttl),
+        candidate.family_expires_at,
+    )
+
     new_session = AuthSession(
         id=new_session_id,
         user_id=candidate.user_id,
@@ -496,7 +537,7 @@ def refresh_session(
         user_agent_summary=(user_agent or candidate.user_agent_summary or "")[:200] or None,
         family_created_at=candidate.family_created_at,
         family_expires_at=candidate.family_expires_at,  # never extended
-        expires_at=now + timedelta(seconds=settings.refresh_token_ttl),
+        expires_at=successor_expires_at,
     )
     db.add(new_session)
 
@@ -514,8 +555,8 @@ def refresh_session(
     access_token = create_access_token(
         user_id=candidate.user_id,
         session_id=new_session_id,
-        org_id=org_id or "",
-        membership_id=membership_id or "",
+        org_id=org_id,
+        membership_id=membership_id,
         role=role,
         jti=new_jti,
     )
@@ -584,13 +625,21 @@ def logout_all(
 
 
 def list_sessions(db: Session, user_id: str, current_session_id: str) -> list[dict]:
-    """Return all non-revoked, non-expired sessions for the user."""
+    """Return all non-revoked, non-expired sessions for the user.
+
+    A session is excluded when either:
+      - revoked_at IS NOT NULL (explicitly revoked)
+      - expires_at <= now (idle TTL exceeded)
+      - family_expires_at <= now (absolute family lifetime exceeded)
+    """
+    now = datetime.now(tz=UTC)
     sessions = (
         db.query(AuthSession)
         .filter(
             AuthSession.user_id == user_id,
             AuthSession.revoked_at.is_(None),
-            AuthSession.expires_at > datetime.now(tz=UTC),
+            AuthSession.expires_at > now,
+            AuthSession.family_expires_at > now,
         )
         .order_by(AuthSession.last_used_at.desc())
         .all()
@@ -792,6 +841,12 @@ def change_password(
         new_csrf = generate_token_hex(32)
         now = datetime.now(tz=UTC)
 
+        # Cap idle expiry at absolute family expiry (never extend family lifetime)
+        successor_expires_at = min(
+            now + timedelta(seconds=settings.refresh_token_ttl),
+            current_session.family_expires_at,
+        )
+
         new_session = AuthSession(
             id=new_session_id,
             user_id=user_id,
@@ -805,15 +860,15 @@ def change_password(
             or None,
             family_created_at=current_session.family_created_at,
             family_expires_at=current_session.family_expires_at,
-            expires_at=now + timedelta(seconds=settings.refresh_token_ttl),
+            expires_at=successor_expires_at,
         )
         db.add(new_session)
 
         access_token = create_access_token(
             user_id=user_id,
             session_id=new_session_id,
-            org_id=org_id or "",
-            membership_id=membership_id or "",
+            org_id=org_id,
+            membership_id=membership_id,
             role=role,
             jti=new_jti,
         )
@@ -928,6 +983,91 @@ def switch_org(
         refresh_token_hex="",
         csrf_value=new_csrf,
         session_id=session_id,
+    )
+
+
+# ── Account enable / disable ──────────────────────────────────────────────────
+
+
+def disable_user_account(
+    db: Session,
+    target_user_id: str,
+    actor_id: str,
+    org_id: str | None,
+    *,
+    request_id: str | None = None,
+) -> None:
+    """Disable a user account and immediately revoke all their active sessions.
+
+    Session revocation is always paired with account disable so no caller
+    can forget it. Re-enabling (enable_user_account) does NOT restore sessions —
+    the user must sign in again.
+
+    Raises 404 if user not found, 409 if already disabled.
+    """
+    user = db.query(User).filter(User.id == target_user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "USER_NOT_FOUND", "message": "User not found"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ALREADY_DISABLED", "message": "Account is already disabled"},
+        )
+    user.is_active = False
+    # Revoke all active sessions immediately
+    db.query(AuthSession).filter(
+        AuthSession.user_id == target_user_id,
+        AuthSession.revoked_at.is_(None),
+    ).update({"revoked_at": datetime.now(tz=UTC)})
+    _write_auth_audit(
+        db,
+        org_id,
+        actor_id,
+        target_user_id,
+        "auth.account_disabled",
+        {},
+        target_type="user",
+        request_id=request_id,
+    )
+
+
+def enable_user_account(
+    db: Session,
+    target_user_id: str,
+    actor_id: str,
+    org_id: str | None,
+    *,
+    request_id: str | None = None,
+) -> None:
+    """Enable a previously disabled user account.
+
+    Does NOT restore revoked sessions — the user must sign in again.
+    Raises 404 if user not found, 409 if already active.
+    """
+    user = db.query(User).filter(User.id == target_user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "USER_NOT_FOUND", "message": "User not found"},
+        )
+    if user.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ALREADY_ACTIVE", "message": "Account is already active"},
+        )
+    user.is_active = True
+    _write_auth_audit(
+        db,
+        org_id,
+        actor_id,
+        target_user_id,
+        "auth.account_enabled",
+        {},
+        target_type="user",
+        request_id=request_id,
     )
 
 

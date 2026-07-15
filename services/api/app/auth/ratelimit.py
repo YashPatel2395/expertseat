@@ -97,3 +97,63 @@ def auth_rate_limit(endpoint_group: str):
             )
 
     return _check
+
+
+def invitation_rate_limit(endpoint_group: str):
+    """FastAPI dependency factory for invitation endpoint rate limiting.
+
+    Uses separate limits from auth rate limiting:
+      - Configured via rate_limit_invitation_max and rate_limit_invitation_window.
+      - Key namespace: "invite:{app_env}:{endpoint_group}:{ip_hmac}"
+      - Fail-closed on public endpoints: Redis unavailable → 503.
+
+    Args:
+        endpoint_group: Logical name for the invitation endpoint
+            (e.g. "invitation-create", "invitation-accept").
+    """
+
+    async def _check(request: Request) -> None:
+        client_ip = request.client.host if request.client else "unknown"
+        ip_key = _ip_hmac(client_ip)
+        key = f"invite:{settings.app_env}:{endpoint_group}:{ip_key}"
+
+        try:
+            r = redis_lib.from_url(
+                settings.redis_url,
+                socket_connect_timeout=settings.redis_connect_timeout,
+                socket_timeout=settings.redis_socket_timeout,
+                decode_responses=True,
+            )
+            try:
+                count = r.incr(key)
+                if count == 1:
+                    r.expire(key, settings.rate_limit_invitation_window)
+                if count > settings.rate_limit_invitation_max:
+                    ttl = r.ttl(key)
+                    retry_after = str(max(ttl, 1))
+                    raise HTTPException(
+                        status_code=429,
+                        detail={
+                            "error": "RATE_LIMITED",
+                            "message": "Too many requests. Please try again later.",
+                        },
+                        headers={"Retry-After": retry_after},
+                    )
+            finally:
+                r.close()
+        except HTTPException:
+            raise
+        except Exception:
+            # Fail-closed: Redis unavailable → reject invitation requests.
+            logger.warning(
+                "Redis unavailable for invitation rate limiting", endpoint=endpoint_group
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "SERVICE_UNAVAILABLE",
+                    "message": "Service temporarily unavailable",
+                },
+            )
+
+    return _check

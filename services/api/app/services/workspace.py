@@ -13,6 +13,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import structlog
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,8 @@ from app.models.user import User
 
 if TYPE_CHECKING:
     from app.services.auth import AuthTokens
+
+logger = structlog.get_logger()
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$")
 _INVITATION_TTL_DAYS = 7
@@ -147,16 +150,20 @@ def get_organization(db: Session, org_id: str) -> Organization:
 
 
 def list_user_organizations(db: Session, user_id: str) -> list[Organization]:
-    """Return all organizations the user is an active member of."""
-    memberships = (
-        db.query(Membership)
-        .filter(Membership.user_id == user_id, Membership.is_active.is_(True))
+    """Return all active organizations the user is an active member of.
+
+    Excludes disabled organizations (Organization.is_active = False).
+    """
+    return (
+        db.query(Organization)
+        .join(Membership, Membership.org_id == Organization.id)
+        .filter(
+            Membership.user_id == user_id,
+            Membership.is_active.is_(True),
+            Organization.is_active.is_(True),
+        )
         .all()
     )
-    org_ids = [m.org_id for m in memberships]
-    if not org_ids:
-        return []
-    return db.query(Organization).filter(Organization.id.in_(org_ids)).all()
 
 
 # ── Member management ──────────────────────────────────────────────────────────
@@ -521,24 +528,53 @@ def accept_invitation(
     *,
     request_id: str | None = None,
 ) -> tuple[Organization, Membership]:
-    """Accept an invitation. User must already have a verified account."""
+    """Accept an invitation. User must already have a verified account.
+
+    Uses SELECT FOR UPDATE on the invitation row to prevent concurrent
+    duplicate acceptances from both succeeding (TOCTOU race protection).
+    Full state recheck occurs after acquiring the row lock.
+    Supports reactivation: if the user has a disabled membership, it is
+    re-enabled rather than rejected.
+    """
     token_bytes = bytes.fromhex(token_hex)
     token_hash = sha256_hex(token_bytes)
+
+    # Acquire row lock before reading state (TOCTOU race protection)
     inv = (
         db.query(OrganizationInvitation)
-        .filter(
-            OrganizationInvitation.token_hash == token_hash,
-            OrganizationInvitation.accepted_at.is_(None),
-            OrganizationInvitation.revoked_at.is_(None),
-            OrganizationInvitation.expires_at > datetime.now(tz=UTC),
-        )
+        .filter(OrganizationInvitation.token_hash == token_hash)
+        .with_for_update()
         .first()
     )
-    if not inv:
+
+    # Full state recheck after acquiring lock
+    now = datetime.now(tz=UTC)
+    if (
+        not inv
+        or inv.accepted_at is not None
+        or inv.revoked_at is not None
+        or inv.expires_at <= now
+    ):
         raise HTTPException(
             status_code=401,
             detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
         )
+
+    # Verify the org is active
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == inv.org_id, Organization.is_active.is_(True))
+        .first()
+    )
+    if not org:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "ORGANIZATION_INACTIVE",
+                "message": "The organization is no longer active",
+            },
+        )
+
     # Verify the accepting user's email matches the invitation
     user = db.query(User).filter(User.id == user_id).first()
     if not user or user.email != inv.email:
@@ -549,30 +585,37 @@ def accept_invitation(
                 "message": "This invitation was sent to a different email address",
             },
         )
-    # Check if already a member
+
+    # Check for existing membership — reactivate if disabled, reject if active
     existing_membership = (
         db.query(Membership)
         .filter(Membership.user_id == user_id, Membership.org_id == inv.org_id)
         .first()
     )
     if existing_membership:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "ALREADY_A_MEMBER",
-                "message": "You are already a member of this organization",
-            },
+        if existing_membership.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "ALREADY_A_MEMBER",
+                    "message": "You are already a member of this organization",
+                },
+            )
+        # Reactivate disabled membership with the new role
+        existing_membership.is_active = True
+        existing_membership.role = inv.role
+        membership = existing_membership
+    else:
+        membership = Membership(
+            user_id=user_id,
+            org_id=inv.org_id,
+            role=inv.role,
+            is_active=True,
         )
-    inv.accepted_at = datetime.now(tz=UTC)
-    membership = Membership(
-        user_id=user_id,
-        org_id=inv.org_id,
-        role=inv.role,
-        is_active=True,
-    )
-    db.add(membership)
+        db.add(membership)
+
+    inv.accepted_at = now
     db.flush()
-    org = _require_org(db, inv.org_id)
     _write_audit(
         db,
         inv.org_id,
@@ -678,8 +721,20 @@ def preview_invitation(db: Session, token_hex: str) -> dict:
             status_code=401,
             detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
         )
-    org = db.query(Organization).filter(Organization.id == inv.org_id).first()
-    org_name = org.name if org else "Unknown"
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == inv.org_id, Organization.is_active.is_(True))
+        .first()
+    )
+    if not org:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "ORGANIZATION_INACTIVE",
+                "message": "The organization is no longer active",
+            },
+        )
+    org_name = org.name
     # Mask the email: show first char + *** + @domain
     email = inv.email
     local, _, domain = email.partition("@")
@@ -698,6 +753,8 @@ def accept_invitation_new_user(
     full_name: str,
     password: str,
     *,
+    terms_version: str | None = None,
+    privacy_notice_version: str | None = None,
     user_agent: str | None = None,
     request_id: str | None = None,
 ) -> tuple[Organization, Membership, AuthTokens]:
@@ -712,6 +769,7 @@ def accept_invitation_new_user(
     Returns (org, membership, auth_tokens) so the route can set cookies.
     """
     from app.auth.crypto import hash_password
+    from app.models.consent import UserConsent
     from app.services.auth import _create_session, _write_auth_audit
 
     try:
@@ -739,6 +797,21 @@ def accept_invitation_new_user(
         raise HTTPException(
             status_code=401,
             detail={"error": "INVALID_INVITATION", "message": "Invalid or expired invitation"},
+        )
+
+    # Verify the org is active before creating an account
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == inv.org_id, Organization.is_active.is_(True))
+        .first()
+    )
+    if not org:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "ORGANIZATION_INACTIVE",
+                "message": "The organization is no longer active",
+            },
         )
 
     # Check no existing user with that email (concurrent race protection)
@@ -776,7 +849,16 @@ def accept_invitation_new_user(
     db.add(membership)
     db.flush()
 
-    org = _require_org(db, inv.org_id)
+    # Record versioned consent (append-only — must exist before commit)
+    if terms_version or privacy_notice_version:
+        consent = UserConsent(
+            user_id=user.id,
+            terms_version=terms_version,
+            privacy_notice_version=privacy_notice_version,
+            org_id=inv.org_id,
+            request_id=request_id,
+        )
+        db.add(consent)
 
     # Write audit events
     _write_audit(
@@ -940,8 +1022,19 @@ def _write_audit_independent(
                     )
                 )
                 sess.commit()
-    except Exception:
-        pass  # Best-effort: audit failure must not affect the caller
+    except Exception as exc:
+        # Audit failure is observable: log error with structured context.
+        # Sensitive payload is never included — only metadata for incident investigation.
+        # Choice rationale: silent swallowing (pass) would hide infrastructure failures
+        # and make the last-admin guard appear broken when it's actually working correctly.
+        logger.error(
+            "Independent audit write failed",
+            event_type=event_type,
+            org_id=org_id,
+            actor_id=actor_id,
+            target_id=target_id,
+            exc_type=type(exc).__name__,
+        )
     finally:
         engine.dispose()
 

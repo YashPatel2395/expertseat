@@ -29,3 +29,18 @@ class RefreshAccountInvalid(Exception):
         self.error_code = error_code
         self.message = message
         super().__init__(f"{error_code}: {message}")
+
+
+class RefreshAccountDisabled(Exception):
+    """Raised during refresh when the user account is disabled.
+
+    The service DOES revoke the session family before raising this exception.
+    The route handler MUST commit those revocations, clear cookies, then return 401.
+
+    Unlike RefreshAccountInvalid, this exception signals that family revocation
+    has already been staged and must be committed — same pattern as RefreshReplayDetected.
+    """
+
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+        super().__init__(f"Account disabled for user {user_id}")
