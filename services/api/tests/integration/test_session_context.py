@@ -98,8 +98,8 @@ def test_login_with_no_memberships_issues_no_org_token(
     login(http_client, "ctx_c@example.com")
 
     me = http_client.get("/api/v1/auth/me").json()
-    # No org context in token
-    assert me["org_id"] == ""
+    # No org context in token — org_id is null (None) not empty string
+    assert me["org_id"] is None
     assert me["role"] == ""
 
 
@@ -121,7 +121,8 @@ def test_login_with_only_disabled_memberships_issues_no_org_token(
     login(http_client, "ctx_d@example.com")
 
     me = http_client.get("/api/v1/auth/me").json()
-    assert me["org_id"] == ""
+    # No org context in token — org_id is null (None) not empty string
+    assert me["org_id"] is None
     assert me["role"] == ""
 
 

@@ -125,6 +125,10 @@ def test_new_user_accept_creates_account_and_joins(
             "token": token,
             "full_name": "Brand New User",
             "password": _NEW_PASSWORD,
+            "terms_accepted": True,
+            "privacy_notice_accepted": True,
+            "terms_version": "2026-07-01",
+            "privacy_notice_version": "2026-07-01",
         },
     )
     assert resp.status_code == 201, resp.text
@@ -175,6 +179,10 @@ def test_new_user_accept_weak_password_rejected(
             "token": token,
             "full_name": "Weak PW User",
             "password": "short",  # too weak
+            "terms_accepted": True,
+            "privacy_notice_accepted": True,
+            "terms_version": "2026-07-01",
+            "privacy_notice_version": "2026-07-01",
         },
     )
     assert resp.status_code == 422, (
@@ -219,6 +227,10 @@ def test_new_user_accept_expired_invitation_rejected(
             "token": token,
             "full_name": "Expired Inv User",
             "password": _NEW_PASSWORD,
+            "terms_accepted": True,
+            "privacy_notice_accepted": True,
+            "terms_version": "2026-07-01",
+            "privacy_notice_version": "2026-07-01",
         },
     )
     assert resp.status_code == 401, (
@@ -249,6 +261,13 @@ def test_new_user_accept_already_accepted_rejected(
 
     token = _extract_invite_token(fake_email, invited_email)
 
+    _consent = {
+        "terms_accepted": True,
+        "privacy_notice_accepted": True,
+        "terms_version": "2026-07-01",
+        "privacy_notice_version": "2026-07-01",
+    }
+
     # First acceptance — should succeed
     resp = http_client.post(
         "/api/v1/workspace/invitations/accept-new",
@@ -256,6 +275,7 @@ def test_new_user_accept_already_accepted_rejected(
             "token": token,
             "full_name": "Already Accepted User",
             "password": _NEW_PASSWORD,
+            **_consent,
         },
     )
     assert resp.status_code == 201, resp.text
@@ -267,6 +287,7 @@ def test_new_user_accept_already_accepted_rejected(
             "token": token,
             "full_name": "Already Accepted User",
             "password": _NEW_PASSWORD,
+            **_consent,
         },
     )
     assert resp.status_code == 401, (
@@ -307,6 +328,10 @@ def test_existing_user_cannot_use_new_user_endpoint(
             "token": token,
             "full_name": "Existing User",
             "password": _NEW_PASSWORD,
+            "terms_accepted": True,
+            "privacy_notice_accepted": True,
+            "terms_version": "2026-07-01",
+            "privacy_notice_version": "2026-07-01",
         },
     )
     assert resp.status_code == 409, (

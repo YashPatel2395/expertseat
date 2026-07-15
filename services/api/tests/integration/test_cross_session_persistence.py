@@ -130,7 +130,15 @@ def _invite_accept_new(
     invitee_client = TestClient(app, raise_server_exceptions=False)
     resp = invitee_client.post(
         "/api/v1/workspace/invitations/accept-new",
-        json={"token": inv_token, "full_name": "Invitee User", "password": _PASSWORD},
+        json={
+            "token": inv_token,
+            "full_name": "Invitee User",
+            "password": _PASSWORD,
+            "terms_accepted": True,
+            "privacy_notice_accepted": True,
+            "terms_version": "2026-07-01",
+            "privacy_notice_version": "2026-07-01",
+        },
     )
     assert resp.status_code == 201, f"Accept-new failed for {invitee_email}: {resp.text}"
 

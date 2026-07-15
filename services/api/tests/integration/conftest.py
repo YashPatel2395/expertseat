@@ -121,7 +121,9 @@ def clear_rate_limits():
     r = redis_lib.from_url(_REDIS_URL, decode_responses=True)
     try:
         # SCAN-based deletion is safer than KEYS for large keyspaces.
-        to_delete = list(r.scan_iter("rate:*"))
+        # Clears both auth rate-limit keys (rate:*) and invitation rate-limit
+        # keys (invite:*) so tests don't interfere with each other.
+        to_delete = list(r.scan_iter("rate:*")) + list(r.scan_iter("invite:*"))
         if to_delete:
             r.delete(*to_delete)
     finally:

@@ -126,6 +126,10 @@ def _setup_two_admin_org(
                 "token": inv_token,
                 "full_name": "Admin Two",
                 "password": _PASSWORD,
+                "terms_accepted": True,
+                "privacy_notice_accepted": True,
+                "terms_version": "2026-07-01",
+                "privacy_notice_version": "2026-07-01",
             },
         )
         assert resp.status_code == 201, f"Accept-new failed: {resp.text}"
