@@ -24,9 +24,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models.outbox import EmailOutbox
 
 from app.auth.crypto import (
     generate_token_bytes,
@@ -39,8 +43,6 @@ from app.auth.crypto import (
 from app.auth.exceptions import RefreshAccountDisabled, RefreshAccountInvalid, RefreshReplayDetected
 from app.auth.tokens import create_access_token
 from app.config import settings
-from app.email.base import EmailProvider
-from app.email.templates import email_verification, password_reset
 from app.models.audit import AuditEvent
 from app.models.organization import Membership, Organization
 from app.models.session import AuthSession
@@ -1074,13 +1076,14 @@ def enable_user_account(
 # ── Email verification helpers ────────────────────────────────────────────────
 
 
-async def send_verification_email(
-    provider: EmailProvider,
-    user: User,
-    token: str,
-) -> None:
+def enqueue_verification_email(db: Session, user: User, token: str) -> EmailOutbox:
+    """Enqueue a verification email in the current (uncommitted) transaction."""
+    from app.email.outbox import enqueue_email
+    from app.email.templates import email_verification
+
     html, text = email_verification(user.full_name, token)
-    await provider.send(
+    return enqueue_email(
+        db,
         to=user.email,
         subject="Verify your ExpertSeat account",
         html_body=html,
@@ -1089,13 +1092,14 @@ async def send_verification_email(
     )
 
 
-async def send_password_reset_email(
-    provider: EmailProvider,
-    user: User,
-    reset_token: str,
-) -> None:
+def enqueue_password_reset_email(db: Session, user: User, reset_token: str) -> EmailOutbox:
+    """Enqueue a password reset email in the current (uncommitted) transaction."""
+    from app.email.outbox import enqueue_email
+    from app.email.templates import password_reset
+
     html, text = password_reset(user.full_name, reset_token)
-    await provider.send(
+    return enqueue_email(
+        db,
         to=user.email,
         subject="Reset your ExpertSeat password",
         html_body=html,

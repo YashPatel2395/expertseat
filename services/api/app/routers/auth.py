@@ -25,6 +25,7 @@ from app.auth.ratelimit import auth_rate_limit
 from app.database import get_db
 from app.email.base import EmailProvider
 from app.email.deps import get_email_provider
+from app.email.outbox import attempt_delivery_after_commit
 from app.services import auth as auth_service
 from app.services import workspace as workspace_service
 
@@ -105,8 +106,9 @@ async def register(
     )
     workspace_service.create_organization(db, f"{user.full_name}'s Workspace", user.id)
     token = auth_service.create_email_verification_token(db, user.id)
+    outbox_row = auth_service.enqueue_verification_email(db, user, token)
     db.commit()
-    await auth_service.send_verification_email(provider, user, token)
+    await attempt_delivery_after_commit(outbox_row.id, provider)
     return {"message": "Registration successful. Please check your email to verify your account."}
 
 
@@ -135,8 +137,9 @@ async def resend_verification(
     user = auth_service.get_user_by_email(db, str(body.email))
     if user and not user.email_verified:
         token = auth_service.create_email_verification_token(db, user.id)
+        outbox_row = auth_service.enqueue_verification_email(db, user, token)
         db.commit()
-        await auth_service.send_verification_email(provider, user, token)
+        await attempt_delivery_after_commit(outbox_row.id, provider)
     return {"message": "If an unverified account exists for that email, a new link has been sent."}
 
 
@@ -266,8 +269,9 @@ async def forgot_password(
     user = auth_service.get_user_by_email(db, str(body.email))
     if user and user.is_active:
         reset_token = auth_service.create_password_reset_token(db, user.id)
+        outbox_row = auth_service.enqueue_password_reset_email(db, user, reset_token)
         db.commit()
-        await auth_service.send_password_reset_email(provider, user, reset_token)
+        await attempt_delivery_after_commit(outbox_row.id, provider)
     return {"message": "If an account exists for that email, a password reset link has been sent."}
 
 

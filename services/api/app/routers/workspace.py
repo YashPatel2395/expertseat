@@ -236,11 +236,10 @@ async def create_invitation(
         ws.update_invitation_delivery(db, invitation.id, "queued", None)
         db.commit()
 
-    # Post-commit delivery using the same session so test savepoint isolation works.
+    # Post-commit delivery using Tx A/B pattern.
     # HTTP response is always "queued" regardless of SMTP outcome (enumeration resistance).
     if outbox_row_id:
-        await attempt_delivery_after_commit(outbox_row_id, provider, db)
-        db.commit()  # persist delivery status (sent / retry / dead)
+        await attempt_delivery_after_commit(outbox_row_id, provider)
 
     return {
         "id": invitation.id,
@@ -291,8 +290,7 @@ async def resend_invitation(
         db.commit()
 
     if outbox_row_id:
-        await attempt_delivery_after_commit(outbox_row_id, provider, db)
-        db.commit()  # persist delivery status (sent / retry / dead)
+        await attempt_delivery_after_commit(outbox_row_id, provider)
 
     return {"message": "Invitation resent.", "delivery_status": "queued"}
 

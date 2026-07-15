@@ -1,26 +1,38 @@
 """Transactional email outbox: enqueue, encrypt, and process email rows.
 
 Encryption uses AES-256-GCM as provided by the PyCA `cryptography` library
-(version >=43.0.0, pinned to 49.0.0 in pyproject.toml).
+(version pinned to 49.0.0 in pyproject.toml).
 
 See ADR-007 for the full cryptographic design rationale.
 
-Encrypted envelope stored in `email_outbox.encrypted_payload` (UTF-8 JSON):
+Envelope versions:
 
+  v1 (legacy, no AAD):
     {
-      "v": 1,                          // envelope format version
-      "alg": "AES-256-GCM",           // algorithm identifier
-      "kid": "<key-id>",              // key slot for rotation
+      "v": 1,
+      "alg": "AES-256-GCM",
+      "kid": "<key-id>",
       "nonce": "<base64url-12-bytes>",
       "ct": "<base64url-ciphertext+16-byte-GCM-tag>"
     }
 
-Workflow (sync-first + outbox-retry):
+  v2 (current, with AAD):
+    Same JSON structure but also includes "msg_type" in the envelope.
+    AAD = canonical JSON of {"alg":..., "kid":..., "msg_type":..., "v":2}
+    (sorted keys, no spaces).
+
+Key rotation:
+  OUTBOX_ENCRYPTION_KEYS=v1:<hex32>,v2:<hex32>  (preferred, keyring format)
+  OUTBOX_ENCRYPTION_KEY=<hex32>                  (legacy single-key, still supported)
+  outbox_active_key_id identifies which key is used for new encryptions.
+
+Workflow (Tx A / network / Tx B):
   1. Route handler: enqueue_email() writes row + business records in ONE transaction.
   2. Route handler commits.
-  3. AFTER commit: attempt_delivery_after_commit() opens a NEW session and calls
-     deliver_now().  This provides low-latency delivery in the common case while
-     the committed row guarantees durability.
+  3. AFTER commit: attempt_delivery_after_commit() runs two separate transactions:
+       Tx A  — claim the row (SELECT FOR UPDATE SKIP LOCKED, set processing, commit)
+       Net   — decrypt payload + SMTP (no DB lock held)
+       Tx B  — finalize: re-fetch by (id, locked_by), mark sent/retry/dead, commit
   4. A background worker calls process_outbox_once() for retry/dead-letter
      handling using SELECT FOR UPDATE SKIP LOCKED to prevent double-processing.
 
@@ -51,11 +63,11 @@ logger = structlog.get_logger()
 
 _GCM_NONCE_BYTES = 12
 _GCM_KEY_BYTES = 32  # AES-256
-_ENVELOPE_VERSION = 1
+_ENVELOPE_VERSION = 2
+_LEGACY_VERSION = 1
 _ALG = "AES-256-GCM"
 
 # Categorised, non-sensitive failure codes stored in outbox rows.
-# These must not contain raw exception messages or recipient data.
 _FAILURE_CODE_DECRYPT = "DECRYPT_ERROR"
 _FAILURE_CODE_SMTP = "SMTP_ERROR"
 _FAILURE_CODE_INVALID = "INVALID_PAYLOAD"
@@ -64,43 +76,76 @@ _FAILURE_CODE_INVALID = "INVALID_PAYLOAD"
 # ── Key management ────────────────────────────────────────────────────────────
 
 
-def _get_key_bytes(kid: str) -> bytes:
-    """Resolve *kid* to the corresponding 32-byte AES key.
+def _build_keyring() -> dict[str, bytes]:
+    """Build a mapping of key-id → raw key bytes from settings.
 
-    Currently only the active key is supported.  Key rotation support
-    (resolving historical key IDs) is reserved for a future migration.
-    See ADR-007 — Rotation Procedure.
+    Prefers OUTBOX_ENCRYPTION_KEYS (keyring format: 'v1:<hex>,v2:<hex>').
+    Falls back to OUTBOX_ENCRYPTION_KEY (legacy single-key).
     """
     from app.config import settings
 
-    active_kid = settings.outbox_active_key_id
-    if kid != active_kid:
+    keyring: dict[str, bytes] = {}
+
+    if settings.outbox_encryption_keys:
+        for entry in settings.outbox_encryption_keys.split(","):
+            kid, _, hex_key = entry.strip().partition(":")
+            if not kid or not hex_key:
+                raise ValueError(f"Invalid OUTBOX_ENCRYPTION_KEYS entry: {entry!r}")
+            try:
+                key_bytes = bytes.fromhex(hex_key)
+            except ValueError as exc:
+                raise ValueError(f"OUTBOX_ENCRYPTION_KEYS key '{kid}' is not valid hex") from exc
+            if len(key_bytes) != _GCM_KEY_BYTES:
+                raise ValueError(
+                    f"OUTBOX_ENCRYPTION_KEYS key '{kid}' must be {_GCM_KEY_BYTES} bytes; "
+                    f"got {len(key_bytes)}"
+                )
+            keyring[kid] = key_bytes
+    elif settings.outbox_encryption_key:
+        raw_hex = settings.outbox_encryption_key
+        try:
+            key_bytes = bytes.fromhex(raw_hex)
+        except ValueError as exc:
+            raise ValueError("OUTBOX_ENCRYPTION_KEY must be a hex string") from exc
+        if len(key_bytes) != _GCM_KEY_BYTES:
+            raise ValueError(
+                f"OUTBOX_ENCRYPTION_KEY must be {_GCM_KEY_BYTES} bytes; got {len(key_bytes)}"
+            )
+        keyring[settings.outbox_active_key_id] = key_bytes
+
+    if not keyring:
         raise ValueError(
-            f"Unsupported key ID '{kid}' — only '{active_kid}' is configured. "
-            "Pending records encrypted with an old key must be processed before "
-            "the old key is removed."
+            "No outbox encryption key configured. "
+            "Set OUTBOX_ENCRYPTION_KEYS (e.g. 'v1:<hex>') or OUTBOX_ENCRYPTION_KEY."
         )
-    raw_hex = settings.outbox_encryption_key
-    try:
-        key_bytes = bytes.fromhex(raw_hex)
-    except ValueError as exc:
-        raise ValueError("OUTBOX_ENCRYPTION_KEY must be a hex string") from exc
-    if len(key_bytes) != _GCM_KEY_BYTES:
+
+    return keyring
+
+
+def _get_key_bytes(kid: str) -> bytes:
+    """Resolve *kid* to the corresponding 32-byte AES key via the keyring."""
+    keyring = _build_keyring()
+    if kid not in keyring:
         raise ValueError(
-            f"OUTBOX_ENCRYPTION_KEY must be {_GCM_KEY_BYTES} bytes; got {len(key_bytes)}"
+            f"Unknown key ID '{kid}'. "
+            "Configure it in OUTBOX_ENCRYPTION_KEYS or OUTBOX_ENCRYPTION_KEY."
         )
-    return key_bytes
+    return keyring[kid]
 
 
 # ── AEAD encrypt / decrypt ────────────────────────────────────────────────────
 
 
-def encrypt_payload(payload: dict) -> bytes:
-    """Encrypt *payload* dict with AES-256-GCM.
+def encrypt_payload(payload: dict, message_type: str = "") -> bytes:
+    """Encrypt *payload* dict with AES-256-GCM (v2 envelope with AAD).
 
     Returns UTF-8 JSON bytes representing the versioned envelope.
     Each call uses a fresh random 96-bit nonce — identical payloads
     produce distinct ciphertexts.
+
+    The Associated Authenticated Data (AAD) authenticates the envelope
+    header fields, preventing an attacker from swapping metadata between
+    messages while keeping the ciphertext valid.
     """
     from app.config import settings
 
@@ -109,12 +154,17 @@ def encrypt_payload(payload: dict) -> bytes:
     aesgcm = AESGCM(key_bytes)
     nonce = os.urandom(_GCM_NONCE_BYTES)
     plaintext = json.dumps(payload, separators=(",", ":")).encode()
-    # encrypt() returns ciphertext + 16-byte GCM authentication tag
-    ciphertext_tag = aesgcm.encrypt(nonce, plaintext, None)
+
+    # AAD authenticates the envelope metadata (v2+)
+    aad_dict = {"alg": _ALG, "kid": kid, "msg_type": message_type, "v": _ENVELOPE_VERSION}
+    aad = json.dumps(aad_dict, sort_keys=True, separators=(",", ":")).encode()
+
+    ciphertext_tag = aesgcm.encrypt(nonce, plaintext, aad)
     envelope = {
         "v": _ENVELOPE_VERSION,
         "alg": _ALG,
         "kid": kid,
+        "msg_type": message_type,
         "nonce": base64.b64encode(nonce).decode(),
         "ct": base64.b64encode(ciphertext_tag).decode(),
     }
@@ -123,6 +173,8 @@ def encrypt_payload(payload: dict) -> bytes:
 
 def decrypt_payload(blob: str | bytes) -> dict:
     """Decrypt *blob* (envelope JSON string or bytes).
+
+    Handles both v1 envelopes (no AAD) and v2 envelopes (with AAD).
 
     Raises ValueError for:
     - Truncated or malformed envelope
@@ -139,7 +191,7 @@ def decrypt_payload(blob: str | bytes) -> dict:
         raise ValueError("Outbox envelope must be a JSON object")
 
     version = envelope.get("v")
-    if version != _ENVELOPE_VERSION:
+    if version not in (_LEGACY_VERSION, _ENVELOPE_VERSION):
         raise ValueError(f"Unsupported envelope version: {version!r}")
 
     alg = envelope.get("alg")
@@ -164,8 +216,17 @@ def decrypt_payload(blob: str | bytes) -> dict:
 
     key_bytes = _get_key_bytes(kid)
     aesgcm = AESGCM(key_bytes)
+
+    # v1: no AAD; v2+: reconstruct AAD from envelope fields
+    if version == _LEGACY_VERSION:
+        aad: bytes | None = None
+    else:
+        msg_type = envelope.get("msg_type", "")
+        aad_dict = {"alg": _ALG, "kid": kid, "msg_type": msg_type, "v": version}
+        aad = json.dumps(aad_dict, sort_keys=True, separators=(",", ":")).encode()
+
     try:
-        plaintext = aesgcm.decrypt(nonce, ciphertext_tag, None)
+        plaintext = aesgcm.decrypt(nonce, ciphertext_tag, aad)
     except InvalidTag as exc:
         raise ValueError("Outbox payload integrity check failed") from exc
 
@@ -201,7 +262,7 @@ def enqueue_email(
         "text_body": text_body,
         "kind": kind,
     }
-    blob = encrypt_payload(payload).decode()  # Text column expects str
+    blob = encrypt_payload(payload, message_type=kind or "email").decode()
     now = datetime.now(UTC)
     row = EmailOutbox(
         encrypted_payload=blob,
@@ -221,16 +282,11 @@ def enqueue_email(
 
 
 async def deliver_now(db: Session, row: EmailOutbox, provider: EmailProvider) -> bool:
-    """Attempt delivery of *row* that is already committed.
-
-    This is called from a NEW session after the business transaction commits.
+    """Attempt delivery of *row* using the current session.
 
     On success: marks the row 'sent'.
     On failure: increments attempt_count, moves to 'retry' or 'dead'.
     Returns True if delivery succeeded.
-
-    Failure codes stored are safe identifiers — no raw exception message,
-    no recipient address.
     """
     from app.config import settings
 
@@ -294,50 +350,53 @@ async def deliver_now(db: Session, row: EmailOutbox, provider: EmailProvider) ->
 async def attempt_delivery_after_commit(
     row_id: str,
     provider: EmailProvider,
-    db: Session | None = None,
 ) -> None:
     """Attempt delivery of the already-committed outbox row.
 
-    Two modes:
-    - ``db`` provided (route handler): use the caller's session directly and
-      do NOT commit internally.  The caller must commit after this call to
-      persist the delivery status update.  This works with test infrastructure
-      that uses savepoint-based transaction isolation, where a new ``SessionLocal``
-      session would not see rows committed only to a savepoint.
-    - ``db`` is None (background worker): open a new ``SessionLocal`` session
-      and commit internally.
+    Uses the Tx A / network / Tx B pattern:
+      Tx A   — open a new session, SELECT FOR UPDATE SKIP LOCKED to claim the
+               pending row (set status=processing, locked_by=worker_id), commit.
+      Network — decrypt payload, call SMTP provider (no DB lock held).
+      Tx B   — open a new session, re-fetch by (id, locked_by), finalize
+               (sent/retry/dead), commit.
 
-    In both cases delivery is attempted only if the row exists and is still
-    ``pending`` — concurrent workers that already claimed the row are skipped.
+    This ensures no lock is held during the SMTP call and stale-worker
+    recovery is possible via the locked_by identifier.
     """
-    if db is not None:
-        row = db.get(EmailOutbox, row_id)
-        if row is None or row.status != "pending":
-            return
-        row.status = "processing"
-        row.locked_at = datetime.now(UTC)
-        db.flush()
-        success = await deliver_now(db, row, provider)
-        if not success and row.status == "processing":
-            row.status = "retry"
-            row.available_at = datetime.now(UTC) + timedelta(minutes=1)
-        db.flush()
-        return
-
     from app.database import SessionLocal
 
-    with SessionLocal() as delivery_db:
-        row = delivery_db.get(EmailOutbox, row_id)
-        if row is None or row.status != "pending":
-            return
+    worker_id = os.urandom(8).hex()
+
+    # Tx A: claim
+    with SessionLocal() as db_a:
+        row = (
+            db_a.query(EmailOutbox)
+            .filter(EmailOutbox.id == row_id, EmailOutbox.status == "pending")
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if row is None:
+            return  # already claimed or delivered by a concurrent worker
         row.status = "processing"
         row.locked_at = datetime.now(UTC)
-        delivery_db.flush()
-        success = await deliver_now(delivery_db, row, provider)
-        if not success and row.status == "processing":
-            row.status = "retry"
-            row.available_at = datetime.now(UTC) + timedelta(minutes=1)
-        delivery_db.commit()
+        row.locked_by = worker_id
+        db_a.commit()
+
+    # Network + Tx B: deliver and finalize
+    with SessionLocal() as db_b:
+        row = (
+            db_b.query(EmailOutbox)
+            .filter(
+                EmailOutbox.id == row_id,
+                EmailOutbox.locked_by == worker_id,
+                EmailOutbox.status == "processing",
+            )
+            .first()
+        )
+        if row is None:
+            return
+        await deliver_now(db_b, row, provider)
+        db_b.commit()
 
 
 # ── Worker — concurrency-safe batch processor ─────────────────────────────────
@@ -361,15 +420,12 @@ async def process_outbox_once(db: Session, provider: EmailProvider, *, limit: in
     now = datetime.now(UTC)
     lock_expiry_cutoff = now - timedelta(seconds=settings.outbox_lock_expiry_seconds)
 
-    # Claim rows: pending/retry with available_at <= now, OR stuck processing
     rows = (
         db.query(EmailOutbox)
         .filter(
             or_(
-                # Normal pending / retry rows
                 (EmailOutbox.status.in_(["pending", "retry"]))
                 & (EmailOutbox.available_at.is_(None) | (EmailOutbox.available_at <= now)),
-                # Recover rows stuck in 'processing' past lock expiry
                 (EmailOutbox.status == "processing")
                 & (EmailOutbox.locked_at <= lock_expiry_cutoff),
             )
@@ -382,7 +438,6 @@ async def process_outbox_once(db: Session, provider: EmailProvider, *, limit: in
     if not rows:
         return 0
 
-    # Atomically mark all claimed rows as 'processing'
     worker_id = os.urandom(8).hex()
     for row in rows:
         row.status = "processing"
