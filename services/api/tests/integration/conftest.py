@@ -21,6 +21,7 @@ See docs/TESTING.md for the full explanation.
 """
 
 import os
+from datetime import UTC, datetime
 
 import pytest
 from argon2 import PasswordHasher
@@ -44,7 +45,9 @@ _crypto_module.password_hasher = PasswordHasher(
 from app.database import get_db  # noqa: E402
 from app.email.deps import get_email_provider  # noqa: E402
 from app.email.fake import FakeEmailProvider  # noqa: E402
+from app.email.outbox import deliver_now  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models.outbox import EmailOutbox  # noqa: E402
 
 # ── Infrastructure URLs ────────────────────────────────────────────────────────
 
@@ -143,11 +146,48 @@ def fake_email():
     provider.reset()
 
 
+# ── Outbox delivery patch ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def _patch_outbox_delivery(db_session, fake_email):
+    """Monkeypatch attempt_delivery_after_commit to use db_session directly.
+
+    This fixture makes outbox delivery savepoint-safe in integration tests.
+    Without it, attempt_delivery_after_commit opens a new SessionLocal() which
+    cannot see rows committed only to a savepoint in the test's outer transaction.
+
+    The patch uses db_session.get() directly and calls deliver_now() with the
+    same session, so delivery is visible within the test's rollback boundary.
+    """
+    import app.email.outbox as outbox_module
+    import app.routers.auth as auth_router_module
+
+    original = outbox_module.attempt_delivery_after_commit
+
+    async def _savepoint_safe_delivery(row_id: str, provider) -> None:
+        row = db_session.get(EmailOutbox, row_id)
+        if row is None or row.status != "pending":
+            return
+        row.status = "processing"
+        row.locked_at = datetime.now(UTC)
+        db_session.flush()
+        await deliver_now(db_session, row, provider)
+        db_session.flush()
+
+    outbox_module.attempt_delivery_after_commit = _savepoint_safe_delivery
+    # Also patch the auth router's bound name (top-level import, not lazy)
+    auth_router_module.attempt_delivery_after_commit = _savepoint_safe_delivery
+    yield
+    outbox_module.attempt_delivery_after_commit = original
+    auth_router_module.attempt_delivery_after_commit = original
+
+
 # ── HTTP client fixture ────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def http_client(db_session, fake_email):
+def http_client(db_session, fake_email, _patch_outbox_delivery):
     """TestClient that uses the transaction-wrapped db_session."""
 
     def override_db():

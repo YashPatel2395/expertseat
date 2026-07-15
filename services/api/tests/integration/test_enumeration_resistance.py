@@ -173,3 +173,68 @@ def test_smtp_error_not_leaked_in_response(
     assert "failed" not in body_text, (
         f"'failed' delivery status must not appear in response: {resp.text}"
     )
+
+
+# ── 6. forgot-password: unknown email returns 200 ─────────────────────────────
+
+
+def test_forgot_password_unknown_email_returns_200(http_client: TestClient):
+    """forgot-password must return 200 for any email, never reveal account existence."""
+    resp = http_client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": "nonexistent_user_xyzzy@example.com"},
+    )
+    assert resp.status_code == 200, f"Expected 200 for unknown email; got {resp.status_code}"
+    assert "reset link" in resp.json().get("message", "").lower()
+
+
+# ── 7. forgot-password: disabled account returns 200 ─────────────────────────
+
+
+def test_forgot_password_disabled_account_returns_200(
+    http_client: TestClient, fake_email, db_session
+):
+    """forgot-password for a disabled account must return the same 200 as for unknown email."""
+    from app.models.user import User
+
+    # Register + verify the user
+    register_and_verify(http_client, fake_email, "fp_disabled@example.com", password=_PASSWORD)
+
+    # Disable the user directly in DB
+    user = db_session.query(User).filter(User.email == "fp_disabled@example.com").first()
+    assert user is not None
+    user.is_active = False
+    db_session.flush()
+
+    resp = http_client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": "fp_disabled@example.com"},
+    )
+    assert resp.status_code == 200, f"Expected 200 for disabled account; got {resp.status_code}"
+
+
+# ── 8. resend-verification: unknown email returns 200 ─────────────────────────
+
+
+def test_resend_verification_unknown_email_returns_200(http_client: TestClient):
+    """resend-verification must return 200 for unknown email, never leak account existence."""
+    resp = http_client.post(
+        "/api/v1/auth/resend-verification",
+        json={"email": "nobody_xyzzy_at_all@example.com"},
+    )
+    assert resp.status_code == 200, f"Expected 200 for unknown email; got {resp.status_code}"
+
+
+# ── 9. resend-verification: already-verified account returns 200 ──────────────
+
+
+def test_resend_verification_already_verified_returns_200(http_client: TestClient, fake_email):
+    """resend-verification for an already-verified account must return 200."""
+    register_and_verify(http_client, fake_email, "already_verified@example.com", password=_PASSWORD)
+    resp = http_client.post(
+        "/api/v1/auth/resend-verification",
+        json={"email": "already_verified@example.com"},
+    )
+    assert resp.status_code == 200, (
+        f"Expected 200 for already-verified account; got {resp.status_code}"
+    )
