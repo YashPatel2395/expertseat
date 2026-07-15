@@ -1,0 +1,13 @@
+# Gitleaks configuration for ExpertSeat.
+# The default ruleset is used; this file only adds narrow allowlist entries
+# for deterministic test fixtures that are NOT real secrets.
+title = "ExpertSeat Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test placeholder hex constants — not real secrets"
+# Commit SHA where the hex constant was present in test_rate_limit_secret.py.
+# The constant has since been replaced with secrets.token_hex(32).
+commits = ["7265f52ced66747a003e70a8acdb65f521440d85"]

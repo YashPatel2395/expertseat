@@ -13,6 +13,10 @@ dependencies = [
     "pydantic-settings>=2.3.0",
     "structlog>=24.0.0",
     "redis>=5.0.0",
+    "argon2-cffi>=23.1.0",
+    "pyjwt>=2.8.0",
+    "email-validator>=2.0.0",
+    "cryptography==49.0.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +39,9 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests requiring a real database and Redis",
+]
 
 [tool.pyright]
 pythonVersion = "3.12"

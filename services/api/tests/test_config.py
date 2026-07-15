@@ -1,4 +1,5 @@
 import os
+import secrets
 
 import pytest
 from pydantic import ValidationError
@@ -113,9 +114,12 @@ def test_env_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     """APP_ENV=production in the OS environment must skip the dotenv file."""
     sentinel_env = tmp_path / ".env"
     sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
-    # Provide explicit DATABASE_URL so production validation does not fail.
+    # Provide explicit values so production validation does not fail.
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
+    monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
+    monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
+    monkeypatch.setenv("OUTBOX_ENCRYPTION_KEY", secrets.token_hex(32))
     monkeypatch.setenv("APP_ENV", "production")
     s = Settings(_env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
@@ -134,9 +138,12 @@ def test_init_selected_production_does_not_load_dotenv(tmp_path, monkeypatch):
     sentinel_env = tmp_path / ".env"
     sentinel_env.write_text("DATABASE_URL=postgresql://sentinel:s@localhost/from_dotenv\n")
     monkeypatch.delenv("APP_ENV", raising=False)
-    # Provide explicit DATABASE_URL so production validation does not fail.
+    # Provide explicit values so production validation does not fail.
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
     monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
+    monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
+    monkeypatch.setenv("RATE_LIMIT_SECRET", "production-rate-limit-secret-long-enough-xx")
+    monkeypatch.setenv("OUTBOX_ENCRYPTION_KEY", secrets.token_hex(32))
     s = Settings(app_env="production", _env_file=str(sentinel_env))  # type: ignore[call-arg]
     assert "from_dotenv" not in s.database_url, (
         f"Init-selected production must not load dotenv, got: {s.database_url!r}"
@@ -163,6 +170,7 @@ def test_production_rejects_development_database_url(monkeypatch):
     DATABASE_URL is simply not set in the environment.
     """
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
     with pytest.raises(ValidationError, match="DATABASE_URL must be explicitly set in production"):
@@ -172,7 +180,45 @@ def test_production_rejects_development_database_url(monkeypatch):
 def test_production_rejects_development_redis_url(monkeypatch):
     """Production must fail validation if REDIS_URL is the development default."""
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "production-secret-key-that-is-long-enough-00")
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
     monkeypatch.delenv("REDIS_URL", raising=False)
     with pytest.raises(ValidationError, match="REDIS_URL must be explicitly set in production"):
+        Settings()
+
+
+# ── SECRET_KEY validation ─────────────────────────────────────────────────────
+
+
+def test_secret_key_too_short_raises(monkeypatch):
+    """Settings must fail validation if SECRET_KEY is shorter than 32 characters."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "short")
+    with pytest.raises(ValidationError, match="SECRET_KEY must be at least 32 characters"):
+        Settings()
+
+
+def test_secret_key_exactly_32_chars_is_accepted(monkeypatch):
+    """A 32-character SECRET_KEY must pass validation."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "a" * 32)
+    s = Settings()
+    assert len(s.secret_key) == 32
+
+
+def test_secret_key_empty_raises(monkeypatch):
+    """An empty SECRET_KEY must fail validation."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "")
+    with pytest.raises(ValidationError, match="SECRET_KEY must be at least 32 characters"):
+        Settings()
+
+
+def test_production_rejects_development_secret_key(monkeypatch):
+    """Production must fail validation if SECRET_KEY is the development default."""
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod:x@prod-host:5432/proddb")
+    monkeypatch.setenv("REDIS_URL", "redis://prod-redis:6379/0")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    with pytest.raises(ValidationError, match="SECRET_KEY must be explicitly set in production"):
         Settings()

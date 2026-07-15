@@ -71,25 +71,30 @@ Everything in the sections below is planned but not implemented.
 
 ---
 
-## Authentication (Planned, Milestone 1)
+## Authentication (Implemented, Milestone 1)
 
-- JWT access tokens (short TTL: 15 minutes)
-- Refresh tokens stored in Redis with TTL (7 days)
-- Refresh tokens are rotated on each use
-- Tokens are invalidated on logout
-- Passwords hashed with bcrypt (minimum cost factor 12)
-- Rate limiting on login endpoint
-- No "remember me" option for initial release (security posture over convenience)
+- JWT access tokens (10-minute TTL) delivered via `es_access` HttpOnly cookie only — never in JSON response body
+- Opaque refresh tokens (14-day TTL) delivered via `es_refresh` HttpOnly cookie — SHA-256 hash stored; raw token never persisted
+- CSRF protection via double-submit cookie pattern (`es_csrf`, non-HttpOnly) required on all authenticated state-mutating endpoints including refresh, logout, logout-all, switch-org, and invitation accept
+- Refresh tokens rotated on every use with `SELECT FOR UPDATE` to prevent TOCTOU races
+- Replay detection: replaying a rotated token revokes the entire session family (family-based revocation)
+- Email verification required before login; 64-char hex token (256-bit entropy) sent via link, not 6-digit code
+- Password minimum 12 characters, maximum 128 characters (unicode supported)
+- Passwords hashed with Argon2id (memory cost 64 MiB, time cost 3, parallelism 1)
+- Rate limiting on auth endpoints (10 req/60s per client IP); IP pseudonymized via HMAC-SHA256 before use as Redis key
+- Fail-closed rate limiting: Redis unavailable → 503 (not bypass)
+- Password reset tokens: 256-bit entropy, 30-minute TTL, SHA-256 hash stored; issuing a new token invalidates all prior unused tokens
 
 ---
 
-## Authorization (Planned, Milestone 1)
+## Authorization (Implemented, Milestone 1)
 
-- Role-based access control: `Admin`, `Recruiter`, `Reviewer` (org-level workspace roles); `superadmin` is a separate platform-level role distinct from org roles
-- All API endpoints require authentication except `/health/*`
-- All data queries include `organization_id` filter (enforced at repository layer)
-- PostgreSQL row-level security as defense-in-depth layer
-- No cross-org data access ever returned (even with valid JWT)
+- Role-based access control: `admin`, `recruiter`, `reviewer` (org-level workspace roles)
+- **DB-backed authorization on every request**: `get_current_user()` validates session (not revoked, not expired), user (active, email verified), membership (active, user and org match), and organization (active) — role derived from DB Membership row, never from JWT claim
+- JWT `org`, `mid`, and `role` claims serve as routing identifiers for DB lookups only
+- Revoked sessions, disabled users, deactivated memberships, and role changes take effect on the next request (no JWT-expiry delay)
+- Last-admin protection: demoting or disabling the last admin of an org is rejected (409 LAST_ADMIN_PROTECTED); enforced with `SELECT FOR UPDATE` to prevent concurrent bypass
+- All workspace-scoped queries receive `org_id` from DB-validated context — never from request body or path parameters
 
 ---
 

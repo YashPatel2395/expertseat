@@ -174,6 +174,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Generate ephemeral outbox encryption key
+        run: |
+          KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+          echo "OUTBOX_ENCRYPTION_KEY=${KEY}" >> $GITHUB_ENV
+
       - name: Backend checks (install, format, lint, typecheck, test, import)
         run: scripts/check_backend.sh
 
@@ -228,6 +233,11 @@ jobs:
           key: ${{ runner.os }}-uv-${{ hashFiles('services/api/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-uv-
+
+      - name: Generate ephemeral outbox encryption key
+        run: |
+          KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+          echo "OUTBOX_ENCRYPTION_KEY=${KEY}" >> $GITHUB_ENV
 
       - name: Migration cycle (install, upgrade, downgrade, upgrade)
         run: scripts/check_migrations.sh

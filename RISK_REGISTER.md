@@ -1,6 +1,6 @@
 # ExpertSeat — Risk Register
 
-**Last Updated**: 2026-07-13
+**Last Updated**: 2026-07-14
 
 Risks are rated on a 1–5 scale for likelihood (how probable) and impact (how harmful if it occurs).
 
@@ -150,13 +150,13 @@ Risks are rated on a 1–5 scale for likelihood (how probable) and impact (how h
 
 ### RISK-011: JWT token stolen via XSS
 
-**Description**: A cross-site scripting vulnerability allows an attacker to steal JWT access tokens stored in browser memory.
+**Description**: A cross-site scripting vulnerability allows an attacker to steal JWT access tokens stored in browser memory or storage.
 **Likelihood**: 2 (CSP headers and secure coding reduce risk)
 **Impact**: 4 (account takeover)
 **Score**: 8
-**Mitigation**: Access tokens in memory only (not localStorage). Refresh tokens in httpOnly cookies. CSP headers. XSS prevention via React's default escaping. Regular dependency audits.
+**Mitigation**: Access tokens delivered only via `es_access` HttpOnly cookie — never in JSON body, never in localStorage or sessionStorage. Refresh tokens in `es_refresh` HttpOnly cookie. CSRF double-submit pattern required on all state-mutating endpoints. CSP headers. XSS prevention via React's default escaping. Regular dependency audits.
 **Owner**: Engineering
-**Status**: Open
+**Status**: Mitigated (Milestone 1)
 **Milestone**: M1
 
 ---
